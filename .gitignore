@@ -1,0 +1,19 @@
+ # Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Results (too large for git, keep local)
+colored_mnist/results/
+
+# Data (downloaded automatically)
+~/datasets/
+
+# Conda
+*.egg-info/
+.env
+
+# IDE
+.vscode/
+.idea/

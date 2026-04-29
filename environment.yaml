@@ -1,0 +1,12 @@
+name: thesis_experiments
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch
+  - torchvision
+  - pip
+  - pip:
+    - scipy
+    - matplotlib
