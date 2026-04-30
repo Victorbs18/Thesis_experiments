@@ -75,12 +75,18 @@ from agreement import (compute_pairwise_agreement, compute_cross_agreement,
 # =============================================================================
 
 ENV_CONFIGS = {
-    "original":  {"e_train": [0.1, 0.2], "diversity": "Low",  "proximity": "Low",
-                  "gt_erm": 0.175, "gt_irm_oracle": 0.670, "gt_irm_train_val": 0.106},
-    "diverse":   {"e_train": [0.1, 0.5], "diversity": "High", "proximity": "Low",
-                  "gt_erm": 0.319, "gt_irm_oracle": 0.717, "gt_irm_train_val": 0.694},
-    "proximate": {"e_train": [0.7, 0.8], "diversity": "Low",  "proximity": "High",
-                  "gt_erm": 0.781, "gt_irm_oracle": 0.817, "gt_irm_train_val": 0.779},
+    "A": {"e_train": [0.1, 0.2], "diversity": "Low",  "proximity": "Low",
+          "expected": "BOTH_FAIL",
+          "gt_erm": 0.175, "gt_irm_oracle": 0.670, "gt_irm_train_val": 0.106},
+    "B": {"e_train": [0.7, 0.8], "diversity": "Low",  "proximity": "High",
+          "expected": "AGREE",
+          "gt_erm": 0.781, "gt_irm_oracle": 0.817, "gt_irm_train_val": 0.779},
+    "C": {"e_train": [0.1, 0.5], "diversity": "High", "proximity": "Low",
+          "expected": "DIVERGE",
+          "gt_erm": 0.319, "gt_irm_oracle": 0.717, "gt_irm_train_val": 0.694},
+    "D": {"e_train": [0.1, 0.8], "diversity": "High", "proximity": "High",
+          "expected": "AGREE",
+          "gt_erm": 0.724, "gt_irm_oracle": 0.728, "gt_irm_train_val": 0.726},
 }
 
 E_TEST           = 0.9
@@ -573,9 +579,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Agreement-guided targeted HP search for IRM"
     )
-    parser.add_argument("--env_config",     type=str, default="diverse",
-                        choices=["original", "diverse", "proximate"])
-    parser.add_argument("--all_configs",    action="store_true")
+    parser.add_argument("--env_config",     type=str, default="C",
+                        choices=["A", "B", "C", "D"],
+                        help="Which 2x2 config to run")
+    parser.add_argument("--all_configs",    action="store_true",
+                        help="Run all four ABCD configs sequentially")
     parser.add_argument("--n_coarse_trials",type=int, default=15,
                         help="Random HP configs in coarse search")
     parser.add_argument("--n_seeds",        type=int, default=3,
@@ -587,7 +595,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     mnist_raw = load_mnist_raw()
-    configs   = (["original", "diverse", "proximate"]
+    configs   = (["A", "B", "C", "D"]
                  if args.all_configs else [args.env_config])
 
     for env_cfg in configs:
