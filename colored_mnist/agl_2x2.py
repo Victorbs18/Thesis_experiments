@@ -228,15 +228,18 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
     val_irm      = max(irm_configs, key=lambda c: c["mean_id_val_acc"])
     val_erm      = max(erm_configs, key=lambda c: c["mean_id_val_acc"])
     gt_train_val = cfg["gt_irm_train_val"]
-    gap_agr_vs_train_val = agr_ood - gt_train_val
-    gap_agr_vs_oracle    = agr_ood - cfg["gt_irm_oracle"]
 
     # Agreement-based: among diverging configs, pick best by ID val acc
     diverging = [c for c in irm_configs if c["n_below"] >= majority]
-    agr_irm   = (max(diverging, key=lambda c: c["mean_id_val_acc"])
-                 if diverging else val_erm)
-    agr_ood   = agr_irm["mean_ood_acc"] if diverging else val_erm["mean_ood_acc"]
+    if diverging:
+        agr_irm = max(diverging, key=lambda c: c["mean_id_val_acc"])
+        agr_ood = agr_irm["mean_ood_acc"]
+    else:
+        agr_irm = val_erm
+        agr_ood = val_erm["mean_ood_acc"]
 
+    gap_agr_vs_train_val = agr_ood - gt_train_val
+    gap_agr_vs_oracle    = agr_ood - cfg["gt_irm_oracle"]
     # ------------------------------------------------------------------
     # Print summary
     # ------------------------------------------------------------------
@@ -294,7 +297,7 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
         "ground_truth": {
             "erm":          cfg["gt_erm"],
             "irm_oracle":   cfg["gt_irm_oracle"],
-            "irm_nonoracle":cfg["gt_irm_nonoracle"],
+            "irm_nonoracle":cfg["gt_irm_train_val"],
         },
         "erm_erm_points":  erm_erm_points,
         "irm_configs_summary": [
