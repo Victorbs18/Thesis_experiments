@@ -93,7 +93,9 @@ E_TEST           = 0.9
 ID_ACC_THRESHOLD = 0.55   # below this → IRM collapsed, reject config
 BETA             = 0.5    # penalty weight for instability in score
 TOP_K            = 3      # number of top coarse configs to guide fine search
+ERM_ENTROPY_GATE = 0.40   # ERM confident OOD = ERM working = no search needed
 FINE_TRIALS      = 10     # number of fine search trials around top-K region
+
 
 
 # =============================================================================
@@ -269,14 +271,25 @@ def run(env_config, n_coarse_trials, n_seeds, device, output_dir,
     n_diverging = sum(1 for c in irm_configs if c["n_below"] >= majority)
     frac_div    = n_diverging / n_coarse_trials
 
+    best_erm_entry  = max(erm_configs, key=lambda c: c["mean_id_val_acc"])
+    erm_ood_entropy = float(np.mean([
+        compute_entropy(m, ref_test, device)
+        for m in best_erm_entry["models"]
+    ]))
+
     print(f"\n  Detection: {n_diverging}/{n_coarse_trials} IRM configs diverge "
           f"from ERM (frac={frac_div:.2f})")
+    print(f"  ERM OOD entropy: {erm_ood_entropy:.3f} "
+          f"({'uncertain' if erm_ood_entropy > ERM_ENTROPY_GATE else 'confident'})")
 
-    if frac_div < 0.2:
-        print(f"  → AGREE: IRM adds no value. Shift is mild. Use ERM.")
-        decision = "AGREE"
+    if erm_ood_entropy <= ERM_ENTROPY_GATE:
+        print(f"  → AGREE_ERM_WORKS: ERM confident OOD. No targeted search needed.")
+        decision = "AGREE_ERM_WORKS"
+    elif frac_div < 0.2:
+        print(f"  → AGREE_NO_DIVERGE: ERM uncertain but IRM not diverging.")
+        decision = "AGREE_NO_DIVERGE"
     else:
-        print(f"  → DIVERGE: Strong shift detected. Proceed to targeted search.")
+        print(f"  → DIVERGE: ERM failing AND IRM diverging. Proceed to targeted search.")
         decision = "DIVERGE"
 
     # Standard non-oracle selection (ID val acc)
