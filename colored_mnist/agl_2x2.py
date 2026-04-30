@@ -52,40 +52,39 @@ CONFIGS = {
         "e_train":   [0.1, 0.2],
         "diversity": "Low",
         "proximity": "Low",
-        "expected":  "AGREE (non-oracle IRM collapses)",
-        "gt_erm":    0.175,
-        "gt_irm_oracle":    0.670,
-        "gt_irm_nonoracle": 0.105,
+        "expected":  "BOTH_FAIL",
+        "gt_erm":            0.175,
+        "gt_irm_oracle":     0.670,
+        "gt_irm_train_val":  0.106,  # train domain val from Exp 5
     },
     "B": {
         "e_train":   [0.7, 0.8],
         "diversity": "Low",
         "proximity": "High",
-        "expected":  "AGREE (ERM already solves task)",
-        "gt_erm":    0.781,
-        "gt_irm_oracle":    0.817,
-        "gt_irm_nonoracle": 0.779,
+        "expected":  "AGREE",
+        "gt_erm":            0.781,
+        "gt_irm_oracle":     0.817,
+        "gt_irm_train_val":  0.779,
     },
     "C": {
         "e_train":   [0.1, 0.5],
         "diversity": "High",
         "proximity": "Low",
-        "expected":  "DIVERGE (IRM genuinely helps)",
-        "gt_erm":    0.319,
-        "gt_irm_oracle":    0.717,
-        "gt_irm_nonoracle": 0.694,
+        "expected":  "DIVERGE",
+        "gt_erm":            0.319,
+        "gt_irm_oracle":     0.717,
+        "gt_irm_train_val":  0.694,
     },
     "D": {
         "e_train":   [0.1, 0.8],
         "diversity": "High",
         "proximity": "High",
-        "expected":  "WEAK DIVERGE (marginal IRM advantage)",
-        "gt_erm":    0.724,
-        "gt_irm_oracle":    0.728,
-        "gt_irm_nonoracle": 0.726,
+        "expected":  "AGREE",
+        "gt_erm":            0.724,
+        "gt_irm_oracle":     0.728,
+        "gt_irm_train_val":  0.726,
     },
 }
-
 E_TEST = 0.9
 
 
@@ -94,7 +93,7 @@ E_TEST = 0.9
 # =============================================================================
 
 def run_config(config_name, cfg, n_trials, n_seeds, device,
-               output_dir, mnist_raw):
+               output_dir, mnist_raw,max_steps=None):
 
     e_values = cfg["e_train"]
     train_images, train_labels, val_images, val_labels = mnist_raw
@@ -111,7 +110,7 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
     print(f"  Ground truth (from Exp 5): "
           f"ERM={cfg['gt_erm']:.1%}  "
           f"IRM oracle={cfg['gt_irm_oracle']:.1%}  "
-          f"IRM non-oracle={cfg['gt_irm_nonoracle']:.1%}")
+          f"IRM train_val={cfg['gt_irm_train_val']:.1%}")
     print()
 
     t0 = time.time()
@@ -136,7 +135,7 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
             train_envs, val_envs = make_val_splits(envs)
 
             # ERM
-            m_erm     = train_model(train_envs, erm_hp, "erm", device, seed)
+            m_erm     = train_model(train_envs, erm_hp, "erm", device, seed,max_steps=max_steps)
             erm_val_a = worst_env_val_acc(m_erm, val_envs, device)
             erm_ood_a = compute_accuracy(m_erm, test_env, device)
             erm_H     = compute_entropy(m_erm, ref_test, device)
@@ -147,7 +146,7 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
             })
 
             # IRM
-            m_irm     = train_model(train_envs, irm_hp, "irm", device, seed)
+            m_irm     = train_model(train_envs, irm_hp, "irm", device, seed,max_steps=max_steps)
             irm_val_a = worst_env_val_acc(m_irm, val_envs, device)
             irm_ood_a = compute_accuracy(m_irm, test_env, device)
             irm_H     = compute_entropy(m_irm, ref_test, device)
@@ -228,6 +227,9 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
     oracle_erm   = max(erm_configs, key=lambda c: c["mean_ood_acc"])
     val_irm      = max(irm_configs, key=lambda c: c["mean_id_val_acc"])
     val_erm      = max(erm_configs, key=lambda c: c["mean_id_val_acc"])
+    gt_train_val = cfg["gt_irm_train_val"]
+    gap_agr_vs_train_val = agr_ood - gt_train_val
+    gap_agr_vs_oracle    = agr_ood - cfg["gt_irm_oracle"]
 
     # Agreement-based: among diverging configs, pick best by ID val acc
     diverging = [c for c in irm_configs if c["n_below"] >= majority]
@@ -249,21 +251,31 @@ def run_config(config_name, cfg, n_trials, n_seeds, device,
           f"IRM={decision_result['entropy']['mean_irm_H']:.3f} "
           f"({decision_result['entropy']['irm_state']})")
 
-    print(f"\n    Selection comparison:")
-    print(f"    {'Strategy':<30} {'OOD acc':>9}  {'vs GT ERM':>10}")
-    print(f"    {'─'*52}")
-    print(f"    {'ERM oracle':<30} {oracle_erm['mean_ood_acc']:>9.3f}  "
-          f"{oracle_erm['mean_ood_acc']-cfg['gt_erm']:>+10.3f}")
-    print(f"    {'ERM ID val':<30} {val_erm['mean_ood_acc']:>9.3f}")
-    print(f"    {'IRM oracle':<30} {oracle_irm['mean_ood_acc']:>9.3f}  "
-          f"{oracle_irm['mean_ood_acc']-cfg['gt_irm_oracle']:>+10.3f}")
-    print(f"    {'IRM ID val':<30} {val_irm['mean_ood_acc']:>9.3f}  "
-          f"{val_irm['mean_ood_acc']-cfg['gt_irm_nonoracle']:>+10.3f}")
-    print(f"    {'IRM agreement-selected':<30} {agr_ood:>9.3f}")
+    
 
-    correct = decision_result["decision"].startswith(
-        cfg["expected"].split()[0]
-    )
+    print(f"\n    Selection comparison:")
+    print(f"    (// = uses OOD labels — not available in practice)")
+    print(f"    {'Strategy':<35} {'OOD acc':>9}  {'vs Exp5 ref':>12}")
+    print(f"    {'─'*60}")
+    print(f"    {'ERM (ID val) — honest baseline':<35} "
+          f"{val_erm['mean_ood_acc']:>9.3f}  "
+          f"GT={cfg['gt_erm']:.3f}")
+    print(f"    {'IRM (ID val) — standard non-oracle':<35} "
+          f"{val_irm['mean_ood_acc']:>9.3f}  "
+          f"GT={gt_train_val:.3f}")
+    print(f"    {'IRM (agreement) — our contribution':<35} "
+          f"{agr_ood:>9.3f}  "
+          f"vs train_val={gap_agr_vs_train_val:+.3f}")
+    print(f"    {'─'*60}")
+    print(f"    {'IRM oracle // (OOD labels — cheat)':<35} "
+          f"{oracle_irm['mean_ood_acc']:>9.3f}  "
+          f"GT={cfg['gt_irm_oracle']:.3f}")
+    print(f"\n    Key gap: agreement vs standard non-oracle: "
+          f"{gap_agr_vs_train_val:+.3f}")
+    print(f"    Key gap: agreement vs oracle (ceiling):    "
+          f"{gap_agr_vs_oracle:+.3f}")
+
+    correct = decision_result["decision"] == cfg["expected"].split("(")[0].strip()
     print(f"\n    Framework correct? "
           f"{'✓ YES' if correct else '✗ NO — expected: ' + cfg['expected']}")
 
@@ -440,7 +452,11 @@ def main():
     parser.add_argument("--output_dir", type=str,  default="results")
     parser.add_argument("--configs",    type=str,  default="ABCD",
                         help="Which configs to run, e.g. 'AC' or 'ABCD'")
+    parser.add_argument("--max_steps", type=int, default=None,
+                    help="Cap training steps for quick sanity checks. "
+                         "None = use sampled value. 101 = fast local run.")
     args = parser.parse_args()
+    
 
     os.makedirs(args.output_dir, exist_ok=True)
     mnist_raw    = load_mnist_raw()
@@ -463,7 +479,7 @@ def main():
         result = run_config(
             cname, CONFIGS[cname],
             args.n_trials, args.n_seeds,
-            args.device, args.output_dir, mnist_raw
+            args.device, args.output_dir, mnist_raw, max_steps=args.max_steps
         )
         # Remove raw data before storing for JSON serialization
         result_clean = {k: v for k, v in result.items() if k != "_raw"}

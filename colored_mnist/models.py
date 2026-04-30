@@ -49,7 +49,7 @@ def irm_penalty(logits, labels):
 # Training
 # =============================================================================
 
-def train_model(envs, hp, method, device, seed):
+def train_model(envs, hp, method, device, seed, max_steps=None):
     """
     Train a model using ERM or IRM on the given environments.
 
@@ -66,8 +66,8 @@ def train_model(envs, hp, method, device, seed):
     loss_fn   = nn.BCEWithLogitsLoss()
     pw        = hp.get("penalty_weight", 0.0)
     pa        = hp.get("penalty_anneal_iters", 0)
-
-    for step in range(hp["steps"]):
+    steps = min(hp["steps"], max_steps) if max_steps else hp["steps"]
+    for step in range(steps):
         model.train()
         total   = torch.tensor(0.0, device=device)
         penalty = torch.tensor(0.0, device=device)

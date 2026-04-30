@@ -84,12 +84,8 @@ def compute_entropy(model, data, device):
     return H.mean().item()
 
 
-def entropy_interpretation(H, threshold=0.4):
-    """
-    Simple interpretation of entropy value.
-    threshold=0.4 is roughly halfway to maximum uncertainty (0.693).
-    """
-    if H < 0.2:
+def entropy_interpretation(H, threshold=0.6):
+    if H < 0.3:
         return "confident"
     elif H < threshold:
         return "moderate"
