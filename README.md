@@ -1,7 +1,6 @@
 # Thesis Experiments — Agreement-based Diagnostics for Domain Generalization
 
 **Author:** Victor  
-**Supervisor:** Werner Zellinger — LIT AI Lab, JKU Linz  
 **Thesis:** Agreement-based diagnostics for domain generalization: predicting when invariant learning outperforms ERM
 
 ---
