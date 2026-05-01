@@ -81,10 +81,8 @@ CONFIGS = {
 }
 
 E_TEST                  = 0.9
-ID_ACC_THRESHOLD        = 0.55   # reject collapsed configs
 BETA                    = 0.5    # penalize instability in score
 TOP_K                   = 3      # top coarse configs guide fine search region
-ERM_ENTROPY_INCREASE_GATE = 0.10 # ΔH above this = ERM struggling OOD
 DIVERGE_FRAC_THRESHOLD  = 0.20   # fraction of diverging IRM configs to trigger DIVERGE
 ACL_DEVIATION_THRESHOLD = 0.03   # IRM above ERM ACL line by this much = DIVERGE
 TTA_LR                  = 1e-4   # TTA learning rate
@@ -139,8 +137,6 @@ def score_irm_labeled(cfg, acl_slope, acl_intercept):
     Labeled mode IRM score: deviation above ERM ACL line.
     Higher = IRM found better OOD features than ERM.
     """
-    if cfg["mean_id_val_acc"] < ID_ACC_THRESHOLD:
-        return -np.inf
     expected_ood = acl_slope * cfg["mean_id_val_acc"] + acl_intercept
     deviation    = cfg["mean_ood_acc"] - expected_ood
     return deviation - BETA * cfg.get("std_ood_acc", 0.0)
@@ -151,8 +147,6 @@ def score_irm_label_free(cfg):
     Label-free mode IRM score: deviation below ERM AGL line.
     Higher score = more below line = stronger divergence from ERM.
     """
-    if cfg["mean_id_val_acc"] < ID_ACC_THRESHOLD:
-        return -np.inf
     return -cfg["mean_deviation"] - BETA * cfg.get("std_deviation", 0.0)
 
 
@@ -357,18 +351,35 @@ def run_config(config_name, cfg, n_coarse_trials, n_seeds, fine_trials,
             decision_labeled = "AGREE_ERM_WORKS"
 
     # --- Label-free mode decision ---
-    if entropy_increase < ERM_ENTROPY_INCREASE_GATE and frac_div_lf < DIVERGE_FRAC_THRESHOLD:
+    # Three conditions must all be true to use IRM:
+    # 1. ERM is struggling OOD (entropy increased)
+    # 2. At least one IRM config diverged from ERM (below AGL line)
+    # 3. Best diverging IRM config has lower ID val than best ERM
+    #    (found harder invariant solution, not a different spurious one)
+    erm_struggling = entropy_increase > 0
+    irm_diverging  = frac_div_lf >= DIVERGE_FRAC_THRESHOLD
+
+    if not erm_struggling:
         decision_lf = "AGREE_ERM_WORKS"
-    elif frac_div_lf >= DIVERGE_FRAC_THRESHOLD:
-        decision_lf = "DIVERGE"
-    else:
+
+    elif not irm_diverging:
         decision_lf = "AGREE_NO_DIVERGE"
+
+    else:
+        # IRM is diverging — check if best diverging config has lower ID val than best ERM
+        div_configs  = [c for c in irm_configs if c["n_below"] >= majority]
+        best_irm_val = max(c["mean_id_val_acc"] for c in div_configs)
+        best_erm_val = max(c["mean_id_val_acc"] for c in erm_configs)
+        if best_irm_val < best_erm_val:
+            decision_lf = "DIVERGE"          # harder invariant solution
+        else:
+            decision_lf = "AGREE_IRM_FAILS"  # different spurious solution
 
     print(f"  Labeled decision:    {decision_labeled} "
           f"({n_diverging_lb}/{n_coarse_trials} IRM above ACL line)")
     print(f"  Label-free decision: {decision_lf} "
-          f"({n_diverging_lf}/{n_coarse_trials} IRM below AGL line, "
-          f"ΔH={entropy_increase:+.3f})")
+          f"(erm_struggling={erm_struggling} ΔH={entropy_increase:+.3f}, "
+          f"irm_diverging={irm_diverging} frac={frac_div_lf:.2f})")
 
     # ------------------------------------------------------------------
     # Phase 3 — Targeted fine search (both modes)
@@ -592,12 +603,14 @@ def run_config(config_name, cfg, n_coarse_trials, n_seeds, fine_trials,
         ("Exp5 Non-oracle (train-domain val)",     cfg["gt_non_oracle"], None),
         ("Standard ERM (ID val)",                  std_erm_acc,          std_erm_acc - cfg["gt_non_oracle"]),
         ("Standard IRM (ID val)",                  std_irm_acc,          std_irm_acc - cfg["gt_non_oracle"]),
-        ("New Labeled ★ (ACL + targeted + TTA)",   final_labeled or 0,   (final_labeled or 0) - cfg["gt_non_oracle"]),
-        ("New Label-free ★ (AGL + targeted + TTA)",final_lf or 0,        (final_lf or 0) - cfg["gt_non_oracle"]),
+        ("New Labeled ★ — pre-TTA  (leaderboard 1)",   pre_labeled or 0,      (pre_labeled or 0) - cfg["gt_non_oracle"]),
+        ("New Labeled ★ — post-TTA (leaderboard 2)",   final_labeled or 0,    (final_labeled or 0) - cfg["gt_non_oracle"]),
+        ("New Label-free ★ — pre-TTA  (leaderboard 1)",pre_lf or 0,           (pre_lf or 0) - cfg["gt_non_oracle"]),
+        ("New Label-free ★ — post-TTA (leaderboard 2)",final_lf or 0,         (final_lf or 0) - cfg["gt_non_oracle"]),
     ]
     for name, acc, gap in rows:
         gap_str = f"{gap:+.3f}" if gap is not None else "   —  "
-        print(f"  {name:<40} {acc:>9.3f}  {gap_str:>19}")
+        print(f"  {name:<46} {acc:>9.3f}  {gap_str:>19}")
 
     print(f"\n  Detection:  Labeled={decision_labeled}  Label-free={decision_lf}")
     print(f"  AGL R²={agl_r2:.3f}  ACL R²={acl_r2:.3f}")
@@ -746,13 +759,16 @@ def print_summary(all_results):
     print(f"  FINAL SUMMARY — Experiment 5 Extension")
     print(f"{'='*80}")
     print(f"\n  {'Config':<8} {'Exp5 Oracle':>12} {'Exp5 Non-orc':>13} "
-          f"{'New Labeled★':>13} {'New LabelFree★':>15}")
-    print(f"  {'─'*65}")
+          f"{'Lab pre':>9} {'Lab post':>10} {'LF pre':>8} {'LF post':>9}")
+    print(f"  {'─'*73}")
     for cname, res in all_results.items():
         r = res["results"]
         print(f"  {cname:<8} {r['exp5_oracle']:>12.1%} {r['exp5_non_oracle']:>13.1%} "
-              f"{(r['new_labeled'] or 0):>13.1%} {(r['new_label_free'] or 0):>15.1%}")
-    print(f"\n  ★ = no test env labels used for HP selection")
+              f"{(r['pre_tta_labeled'] or 0):>9.1%} {(r['new_labeled'] or 0):>10.1%} "
+              f"{(r['pre_tta_lf'] or 0):>8.1%} {(r['new_label_free'] or 0):>9.1%}")
+    print(f"\n  pre  = before TTA  (leaderboard 1 comparable)")
+    print(f"  post = after TTA   (leaderboard 2 comparable)")
+    print(f"  ★ = no test env labels used for HP selection")
     print(f"  All values = OOD test accuracy at e=0.9")
 
 
