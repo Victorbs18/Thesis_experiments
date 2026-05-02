@@ -166,7 +166,7 @@ class ResNet50(nn.Module):
     """
     def __init__(self, num_classes=7):
         super().__init__()
-        network          = models.resnet50(pretrained=True)
+        network          = models.resnet50(weights="IMAGENET1K_V1")
         self.n_outputs   = network.fc.in_features  # 2048
         network.fc       = nn.Identity()
         self.featurizer  = network
@@ -227,14 +227,16 @@ def irm_penalty(logits, y):
 def _infinite_loader(dataset, batch_size, augment, device):
     """Infinite loader with augmentation."""
     transform = get_transforms(augment=augment)
-    dataset.transform = transform
+    # Handle both Dataset and Subset
+    underlying = dataset.dataset if hasattr(dataset, 'dataset') else dataset
+    underlying.transform = transform
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=0,
         drop_last=True,
-        pin_memory=True,
+        pin_memory=False,
     )
     while True:
         for x, y in loader:
@@ -391,9 +393,6 @@ def run_sweep(algorithm, domains, test_env_idx, n_hparams, n_trials,
             env_out_accs = []   # val portion accuracy
 
             for i, split in enumerate(splits):
-                in_acc  = accuracy(model, split["train"].dataset, device)
-                out_acc = accuracy(model, split["val"].dataset,   device)
-                # Use proper subsets
                 in_acc  = _subset_accuracy(model, split["train"], device)
                 out_acc = _subset_accuracy(model, split["val"],   device)
                 env_in_accs.append(in_acc)
@@ -428,20 +427,20 @@ def run_sweep(algorithm, domains, test_env_idx, n_hparams, n_trials,
 
 @torch.no_grad()
 def _subset_accuracy(model, subset, device, batch_size=64):
-    """Evaluate accuracy on a Subset."""
+    """Evaluate accuracy on a Subset or Dataset."""
     transform = get_transforms(augment=False)
-    # Temporarily set transform on underlying dataset
-    original_transform = subset.dataset.transform
-    subset.dataset.transform = transform
+    underlying = subset.dataset if hasattr(subset, 'dataset') else subset
+    original_transform = underlying.transform
+    underlying.transform = transform
     loader  = DataLoader(subset, batch_size=batch_size,
-                         shuffle=False, num_workers=2)
+                         shuffle=False, num_workers=0)
     correct = total = 0
     for x, y in loader:
         x, y    = x.to(device), y.to(device)
         pred    = model(x).argmax(1)
         correct += (pred == y).sum().item()
         total   += len(y)
-    subset.dataset.transform = original_transform
+    underlying.transform = original_transform
     return correct / total if total > 0 else 0.0
 
 
