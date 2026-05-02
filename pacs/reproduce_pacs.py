@@ -77,32 +77,39 @@ DOMAINBED_ORACLE = {
 
 
 class PACSDataset(Dataset):
-    """PACS domain dataset — loads images from folder structure domain/class/image.jpg"""
+    """
+    PACS domain dataset — preloads all images into memory as PIL Images.
+    This avoids repeated disk I/O and makes training much faster.
+    PACS is small enough (~10k images) to fit in RAM easily.
+    """
 
     def __init__(self, domain_dir, transform=None):
         self.transform = transform
-        self.samples   = []
+        self.images    = []   # preloaded PIL images
+        self.labels    = []
 
+        print(f"    Preloading {os.path.basename(domain_dir)}...", end=" ", flush=True)
         for class_idx, class_name in enumerate(PACS_CLASSES):
             class_dir = os.path.join(domain_dir, class_name)
             if not os.path.isdir(class_dir):
                 continue
-            for fname in os.listdir(class_dir):
+            for fname in sorted(os.listdir(class_dir)):
                 if fname.lower().endswith((".jpg", ".jpeg", ".png")):
-                    self.samples.append((
-                        os.path.join(class_dir, fname),
-                        class_idx
-                    ))
+                    img = Image.open(
+                        os.path.join(class_dir, fname)
+                    ).convert("RGB")
+                    self.images.append(img)
+                    self.labels.append(class_idx)
+        print(f"{len(self.images)} images loaded")
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.images)
 
     def __getitem__(self, idx):
-        path, label = self.samples[idx]
-        img = Image.open(path).convert("RGB")
+        img = self.images[idx]
         if self.transform:
             img = self.transform(img)
-        return img, label
+        return img, self.labels[idx]
 
 
 def get_transforms(augment=True):
@@ -225,18 +232,17 @@ def irm_penalty(logits, y):
 # =============================================================================
 
 def _infinite_loader(dataset, batch_size, augment, device):
-    """Infinite loader with augmentation."""
+    """Infinite loader with augmentation. Images already in RAM so num_workers=2 is safe."""
     transform = get_transforms(augment=augment)
-    # Handle both Dataset and Subset
     underlying = dataset.dataset if hasattr(dataset, 'dataset') else dataset
     underlying.transform = transform
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=2,
         drop_last=True,
-        pin_memory=False,
+        pin_memory=True,
     )
     while True:
         for x, y in loader:
@@ -433,7 +439,7 @@ def _subset_accuracy(model, subset, device, batch_size=64):
     original_transform = underlying.transform
     underlying.transform = transform
     loader  = DataLoader(subset, batch_size=batch_size,
-                         shuffle=False, num_workers=0)
+                         shuffle=False, num_workers=2)
     correct = total = 0
     for x, y in loader:
         x, y    = x.to(device), y.to(device)
