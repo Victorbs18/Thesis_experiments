@@ -452,64 +452,84 @@ def main():
     print(f"  env +80% (e=0.2): {len(envs[1]['images'])} samples")
     print(f"  env -90% (e=0.9): {len(envs[2]['images'])} samples  ← test")
 
-    test_env_idx = 2  # -90% is the test environment
+    # DomainBed reference numbers (train-domain val, from paper)
+    DOMAINBED_REF = {
+        "ERM": {"+90%": 71.7, "+80%": 72.9, "-90%": 10.0},
+        "IRM": {"+90%": 72.5, "+80%": 73.3, "-90%": 10.2},
+    }
+    ENV_NAMES = ["+90%", "+80%", "-90%"]
+    TEST_ENVS = [0, 1, 2]  # run all three as DomainBed does
 
     all_algo_results = {}
     t0 = time.time()
 
     for algorithm in algorithms:
-        print(f"\n{'='*60}")
+        print(f"\n{'='*65}")
         print(f"  {algorithm}  —  {args.n_hparams} HP configs × {args.n_trials} seeds")
-        print(f"{'='*60}")
+        print(f"  Running all 3 test environments")
+        print(f"{'='*65}")
 
-        results = run_sweep(
-            algorithm, envs,
-            args.n_hparams, args.n_trials,
-            device, test_env_idx, args.n_steps
-        )
+        algo_results = {}
 
-        # Apply three selection methods
-        iid_test,  iid_val  = iid_selection(results,          test_env_idx)
-        loo_test,  loo_val  = leave_one_out_selection(results, test_env_idx)
-        ora_test,  ora_val  = oracle_selection(results,        test_env_idx)
+        for test_env_idx in TEST_ENVS:
+            env_name = ENV_NAMES[test_env_idx]
+            print(f"\n  --- Test env: {env_name} (env{test_env_idx}) ---")
 
-        print(f"\n  Results for {algorithm} — test env: -90% (e=0.9)")
-        print(f"  {'Selection method':<35} {'Test acc':>9}  {'Val acc':>9}")
-        print(f"  {'─'*57}")
-        print(f"  {'Train-domain val (IID)':<35} {iid_test:>9.1%}  {iid_val:>9.1%}")
-        print(f"  {'Leave-one-domain-out':<35} {loo_test:>9.1%}  {loo_val:>9.1%}")
-        print(f"  {'Oracle (test labels — cheat)':<35} {ora_test:>9.1%}  {ora_val:>9.1%}")
+            results = run_sweep(
+                algorithm, envs,
+                args.n_hparams, args.n_trials,
+                device, test_env_idx, args.n_steps
+            )
 
-        print(f"\n  DomainBed reference (train-domain val):")
-        if algorithm == "ERM":
-            print(f"    +90%: 71.7%  +80%: 72.9%  -90%: 10.0%")
-        elif algorithm == "IRM":
-            print(f"    +90%: 72.5%  +80%: 73.3%  -90%: 10.2%")
+            iid_test, iid_val = iid_selection(results,          test_env_idx)
+            loo_test, loo_val = leave_one_out_selection(results, test_env_idx)
+            ora_test, ora_val = oracle_selection(results,        test_env_idx)
 
-        all_algo_results[algorithm] = {
-            "iid":    {"test": iid_test,  "val": iid_val},
-            "loo":    {"test": loo_test,  "val": loo_val},
-            "oracle": {"test": ora_test,  "val": ora_val},
-            "all_results": [
-                {k: v for k, v in r.items() if k != "hp"}
-                for r in results
-            ]
-        }
+            ref = DOMAINBED_REF.get(algorithm, {}).get(env_name, None)
+            ref_str = f"  (DomainBed IID ref: {ref:.1f}%)" if ref else ""
 
-    # Final comparison table
-    print(f"\n{'='*60}")
-    print(f"  FINAL COMPARISON TABLE")
-    print(f"  (test env = -90%, all values = test accuracy)")
-    print(f"{'='*60}")
-    print(f"  {'Algorithm':<10} {'Train-domain val':>18} {'Leave-one-out':>15} {'Oracle':>8}")
-    print(f"  {'─'*55}")
+            print(f"\n  Results — {algorithm} test env {env_name}:")
+            print(f"  {'Selection method':<35} {'Test acc':>9}  {'Val acc':>9}")
+            print(f"  {'─'*57}")
+            print(f"  {'Train-domain val (IID)':<35} {iid_test:>9.1%}  {iid_val:>9.1%}{ref_str}")
+            print(f"  {'Leave-one-domain-out':<35} {loo_test:>9.1%}  {loo_val:>9.1%}")
+            print(f"  {'Oracle (test labels — cheat)':<35} {ora_test:>9.1%}  {ora_val:>9.1%}")
+
+            algo_results[env_name] = {
+                "iid":    {"test": iid_test, "val": iid_val},
+                "loo":    {"test": loo_test, "val": loo_val},
+                "oracle": {"test": ora_test, "val": ora_val},
+            }
+
+        all_algo_results[algorithm] = algo_results
+
+    # Final summary table matching DomainBed format
+    print(f"\n{'='*75}")
+    print(f"  FINAL SUMMARY — DomainBed format")
+    print(f"  (train-domain val selection, all values = test accuracy)")
+    print(f"{'='*75}")
+    print(f"  {'Algorithm':<10} {'+90%':>10} {'+80%':>10} {'-90%':>10} {'Avg':>8}")
+    print(f"  {'─'*52}")
     for alg, res in all_algo_results.items():
-        print(f"  {alg:<10} {res['iid']['test']:>18.1%} "
-              f"{res['loo']['test']:>15.1%} {res['oracle']['test']:>8.1%}")
+        vals = [res[e]["iid"]["test"] * 100 for e in ENV_NAMES]
+        avg  = np.mean(vals)
+        print(f"  {alg:<10} {vals[0]:>9.1f}% {vals[1]:>9.1f}% {vals[2]:>9.1f}% {avg:>7.1f}%")
 
-    print(f"\n  DomainBed reference (-90% test env):")
-    print(f"  ERM        train-domain val: 10.0%   oracle: 28.7%")
-    print(f"  IRM        train-domain val: 10.2%   oracle: 58.5%")
+    print(f"\n  DomainBed reference (train-domain val):")
+    print(f"  ERM        71.7%    72.9%    10.0%    51.5%")
+    print(f"  IRM        72.5%    73.3%    10.2%    52.0%")
+
+    print(f"\n  Oracle comparison:")
+    print(f"  {'Algorithm':<10} {'+90%':>10} {'+80%':>10} {'-90%':>10} {'Avg':>8}")
+    print(f"  {'─'*52}")
+    for alg, res in all_algo_results.items():
+        vals = [res[e]["oracle"]["test"] * 100 for e in ENV_NAMES]
+        avg  = np.mean(vals)
+        print(f"  {alg:<10} {vals[0]:>9.1f}% {vals[1]:>9.1f}% {vals[2]:>9.1f}% {avg:>7.1f}%")
+
+    print(f"\n  DomainBed oracle reference:")
+    print(f"  ERM        71.8%    72.9%    28.7%    57.8%")
+    print(f"  IRM        72.0%    72.5%    58.5%    67.7%")
 
     print(f"\n  Total time: {(time.time()-t0)/60:.1f} min")
 
