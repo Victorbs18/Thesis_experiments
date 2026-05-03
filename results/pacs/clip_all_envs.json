@@ -1,0 +1,127 @@
+{
+  "experiment": "PACS CLIP ViT-B/32 — last block + head finetuned",
+  "settings": {
+    "backbone": "CLIP ViT-B/32",
+    "trainable_params": "7,486,215 / 87,852,807 (8.5%)",
+    "n_hparams": 5,
+    "n_trials": 1,
+    "n_steps": 2001,
+    "selection": "train-domain val (IID)"
+  },
+  "ERM": {
+    "A": {
+      "iid": {"test": 0.917, "val": 0.982},
+      "oracle": {"test": 0.939},
+      "domainbed_ref_iid": 0.847,
+      "domainbed_ref_oracle": 0.865,
+      "trials": [
+        {"hp": 0, "A_in": 0.919, "A_out": 0.902, "C_in": 0.996, "C_out": 0.998, "P_in": 0.999, "P_out": 0.997, "S_in": 0.964, "S_out": 0.949},
+        {"hp": 1, "A_in": 0.935, "A_out": 0.922, "C_in": 0.997, "C_out": 0.998, "P_in": 0.999, "P_out": 0.997, "S_in": 0.965, "S_out": 0.939},
+        {"hp": 2, "A_in": 0.943, "A_out": 0.917, "C_in": 1.000, "C_out": 0.996, "P_in": 1.000, "P_out": 0.997, "S_in": 0.988, "S_out": 0.954},
+        {"hp": 3, "A_in": 0.944, "A_out": 0.922, "C_in": 0.987, "C_out": 0.991, "P_in": 0.998, "P_out": 1.000, "S_in": 0.931, "S_out": 0.929},
+        {"hp": 4, "A_in": 0.960, "A_out": 0.939, "C_in": 0.988, "C_out": 0.991, "P_in": 0.999, "P_out": 0.997, "S_in": 0.937, "S_out": 0.934}
+      ]
+    },
+    "C": {
+      "iid": {"test": 0.970, "val": 0.974},
+      "oracle": {"test": 0.989},
+      "domainbed_ref_iid": 0.808,
+      "domainbed_ref_oracle": 0.813,
+      "trials": [
+        {"hp": 0, "A_in": 0.978, "A_out": 0.963, "C_in": 0.970, "C_out": 0.981, "P_in": 0.998, "P_out": 0.997, "S_in": 0.928, "S_out": 0.926},
+        {"hp": 1, "A_in": 0.979, "A_out": 0.963, "C_in": 0.974, "C_out": 0.989, "P_in": 0.998, "P_out": 0.997, "S_in": 0.931, "S_out": 0.921},
+        {"hp": 2, "A_in": 0.997, "A_out": 0.976, "C_in": 0.952, "C_out": 0.970, "P_in": 0.999, "P_out": 0.997, "S_in": 0.981, "S_out": 0.950},
+        {"hp": 3, "A_in": 0.995, "A_out": 0.973, "C_in": 0.957, "C_out": 0.972, "P_in": 0.999, "P_out": 1.000, "S_in": 0.977, "S_out": 0.939},
+        {"hp": 4, "A_in": 0.996, "A_out": 0.976, "C_in": 0.967, "C_out": 0.979, "P_in": 0.999, "P_out": 0.997, "S_in": 0.977, "S_out": 0.946}
+      ]
+    },
+    "P": {
+      "iid": {"test": 1.000, "val": 0.973},
+      "oracle": {"test": 1.000},
+      "domainbed_ref_iid": 0.972,
+      "domainbed_ref_oracle": 0.962,
+      "trials": [
+        {"hp": 0, "A_in": 0.999, "A_out": 0.976, "C_in": 0.998, "C_out": 0.996, "P_in": 0.996, "P_out": 1.000, "S_in": 0.990, "S_out": 0.948},
+        {"hp": 1, "A_in": 0.982, "A_out": 0.971, "C_in": 0.986, "C_out": 0.994, "P_in": 0.996, "P_out": 1.000, "S_in": 0.932, "S_out": 0.932},
+        {"hp": 2, "A_in": 0.985, "A_out": 0.973, "C_in": 0.991, "C_out": 0.991, "P_in": 0.996, "P_out": 0.997, "S_in": 0.939, "S_out": 0.926},
+        {"hp": 3, "A_in": 0.994, "A_out": 0.976, "C_in": 0.995, "C_out": 0.991, "P_in": 0.993, "P_out": 0.991, "S_in": 0.960, "S_out": 0.944},
+        {"hp": 4, "A_in": 0.980, "A_out": 0.968, "C_in": 0.986, "C_out": 0.994, "P_in": 0.994, "P_out": 0.991, "S_in": 0.933, "S_out": 0.930}
+      ]
+    },
+    "S": {
+      "iid": {"test": 0.884, "val": 0.993},
+      "oracle": {"test": 0.915},
+      "domainbed_ref_iid": 0.793,
+      "domainbed_ref_oracle": 0.827,
+      "trials": [
+        {"hp": 0, "A_in": 0.992, "A_out": 0.961, "C_in": 0.997, "C_out": 0.989, "P_in": 0.999, "P_out": 0.997, "S_in": 0.880, "S_out": 0.882},
+        {"hp": 1, "A_in": 0.995, "A_out": 0.983, "C_in": 0.999, "C_out": 0.998, "P_in": 0.999, "P_out": 0.997, "S_in": 0.887, "S_out": 0.884},
+        {"hp": 2, "A_in": 0.982, "A_out": 0.968, "C_in": 0.988, "C_out": 0.991, "P_in": 0.999, "P_out": 1.000, "S_in": 0.873, "S_out": 0.876},
+        {"hp": 3, "A_in": 0.990, "A_out": 0.973, "C_in": 0.994, "C_out": 0.996, "P_in": 0.999, "P_out": 1.000, "S_in": 0.875, "S_out": 0.878},
+        {"hp": 4, "A_in": 0.998, "A_out": 0.973, "C_in": 0.998, "C_out": 0.998, "P_in": 1.000, "P_out": 0.997, "S_in": 0.905, "S_out": 0.915}
+      ]
+    }
+  },
+  "IRM": {
+    "A": {
+      "iid": {"test": 0.929, "val": 0.980},
+      "oracle": {"test": 0.929},
+      "domainbed_ref_iid": 0.848,
+      "domainbed_ref_oracle": 0.842,
+      "trials": [
+        {"hp": 0, "A_in": 0.289, "A_out": 0.323, "C_in": 0.417, "C_out": 0.429, "P_in": 0.396, "P_out": 0.374, "S_in": 0.412, "S_out": 0.439},
+        {"hp": 1, "A_in": 0.944, "A_out": 0.912, "C_in": 0.985, "C_out": 0.991, "P_in": 0.998, "P_out": 1.000, "S_in": 0.922, "S_out": 0.911},
+        {"hp": 2, "A_in": 0.827, "A_out": 0.834, "C_in": 0.924, "C_out": 0.927, "P_in": 0.991, "P_out": 0.991, "S_in": 0.841, "S_out": 0.804},
+        {"hp": 3, "A_in": 0.942, "A_out": 0.919, "C_in": 0.982, "C_out": 0.989, "P_in": 0.996, "P_out": 0.997, "S_in": 0.915, "S_out": 0.898},
+        {"hp": 4, "A_in": 0.957, "A_out": 0.929, "C_in": 0.995, "C_out": 0.998, "P_in": 0.999, "P_out": 0.997, "S_in": 0.962, "S_out": 0.946}
+      ]
+    },
+    "C": {
+      "iid": {"test": 0.949, "val": 0.974},
+      "oracle": {"test": 0.985},
+      "domainbed_ref_iid": 0.764,
+      "domainbed_ref_oracle": 0.797,
+      "trials": [
+        {"hp": 0, "A_in": 0.976, "A_out": 0.956, "C_in": 0.965, "C_out": 0.985, "P_in": 0.998, "P_out": 0.997, "S_in": 0.926, "S_out": 0.918},
+        {"hp": 1, "A_in": 0.925, "A_out": 0.890, "C_in": 0.825, "C_out": 0.831, "P_in": 0.888, "P_out": 0.877, "S_in": 0.832, "S_out": 0.820},
+        {"hp": 2, "A_in": 0.971, "A_out": 0.941, "C_in": 0.974, "C_out": 0.985, "P_in": 0.997, "P_out": 0.997, "S_in": 0.922, "S_out": 0.908},
+        {"hp": 3, "A_in": 0.500, "A_out": 0.511, "C_in": 0.509, "C_out": 0.491, "P_in": 0.507, "P_out": 0.494, "S_in": 0.346, "S_out": 0.364},
+        {"hp": 4, "A_in": 0.996, "A_out": 0.971, "C_in": 0.934, "C_out": 0.949, "P_in": 0.999, "P_out": 0.997, "S_in": 0.983, "S_out": 0.954}
+      ]
+    },
+    "P": {
+      "iid": {"test": 0.994, "val": 0.976},
+      "oracle": {"test": 0.994},
+      "domainbed_ref_iid": 0.967,
+      "domainbed_ref_oracle": 0.959,
+      "trials": [
+        {"hp": 0, "A_in": 1.000, "A_out": 0.978, "C_in": 0.998, "C_out": 0.998, "P_in": 0.996, "P_out": 0.994, "S_in": 0.991, "S_out": 0.952},
+        {"hp": 1, "A_in": 0.975, "A_out": 0.958, "C_in": 0.980, "C_out": 0.987, "P_in": 0.992, "P_out": 0.991, "S_in": 0.917, "S_out": 0.912},
+        {"hp": 2, "A_in": 0.995, "A_out": 0.976, "C_in": 0.996, "C_out": 0.996, "P_in": 0.994, "P_out": 0.991, "S_in": 0.962, "S_out": 0.943},
+        {"hp": 3, "A_in": 0.569, "A_out": 0.562, "C_in": 0.678, "C_out": 0.684, "P_in": 0.756, "P_out": 0.766, "S_in": 0.608, "S_out": 0.613},
+        {"hp": 4, "A_in": 0.987, "A_out": 0.976, "C_in": 0.991, "C_out": 0.998, "P_in": 0.993, "P_out": 0.991, "S_in": 0.956, "S_out": 0.946}
+      ]
+    },
+    "S": {
+      "iid": {"test": 0.902, "val": 0.990},
+      "oracle": {"test": 0.902},
+      "domainbed_ref_iid": 0.761,
+      "domainbed_ref_oracle": 0.783,
+      "trials": [
+        {"hp": 0, "A_in": 0.994, "A_out": 0.976, "C_in": 0.997, "C_out": 0.991, "P_in": 1.000, "P_out": 0.997, "S_in": 0.888, "S_out": 0.892},
+        {"hp": 1, "A_in": 0.993, "A_out": 0.978, "C_in": 0.995, "C_out": 0.994, "P_in": 0.999, "P_out": 0.997, "S_in": 0.897, "S_out": 0.902},
+        {"hp": 2, "A_in": 0.280, "A_out": 0.293, "C_in": 0.198, "C_out": 0.224, "P_in": 0.192, "P_out": 0.171, "S_in": 0.187, "S_out": 0.192},
+        {"hp": 3, "A_in": 0.509, "A_out": 0.548, "C_in": 0.549, "C_out": 0.530, "P_in": 0.460, "P_out": 0.476, "S_in": 0.427, "S_out": 0.459},
+        {"hp": 4, "A_in": 0.984, "A_out": 0.971, "C_in": 0.988, "C_out": 0.991, "P_in": 0.999, "P_out": 1.000, "S_in": 0.879, "S_out": 0.880}
+      ]
+    }
+  },
+  "summary": {
+    "ERM_avg_iid": 0.943,
+    "IRM_avg_iid": 0.943,
+    "ERM_avg_oracle": 0.961,
+    "IRM_avg_oracle": 0.953,
+    "total_time_min": 292.1,
+    "note": "5 HP configs x 1 seed x 2001 steps. Novel results — no DomainBed CLIP baseline exists."
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "experiment": "ColoredMNIST AGL Framework — Experiment 5 Extension",
+  "settings": {
+    "backbone": "Custom MLP",
+    "n_coarse_trials": 20,
+    "n_seeds": 3,
+    "fine_trials": 10,
+    "e_test": 0.9,
+    "framework_version": "binary entropy signal + best-config IRM check + pre/post TTA"
+  },
+  "configs": {
+    "A": {
+      "e_train": [0.1, 0.2],
+      "diversity": "Low",
+      "proximity": "Low",
+      "exp5_oracle": 0.676,
+      "exp5_non_oracle": 0.106,
+      "agl_line": {"slope": 1.123, "intercept": -0.645, "r2": 0.987},
+      "acl_line": {"slope": -6.241, "intercept": 5.130, "r2": 0.938},
+      "entropy": {"id": 0.398, "ood": 0.491, "delta": 0.093},
+      "detection": {
+        "labeled": "AGREE_IRM_FAILS",
+        "label_free": "AGREE_NO_DIVERGE",
+        "n_diverging_lb": 1,
+        "n_diverging_lf": 0,
+        "frac_div_lf": 0.00,
+        "erm_struggling": true
+      },
+      "results": {
+        "standard_erm_id_val": 0.106,
+        "standard_irm_id_val": 0.101,
+        "new_labeled_pre_tta": 0.279,
+        "new_labeled_post_tta": 0.279,
+        "new_lf_pre_tta": 0.107,
+        "new_lf_post_tta": 0.107
+      },
+      "time_min": 82.4
+    },
+    "B": {
+      "e_train": [0.7, 0.8],
+      "diversity": "Low",
+      "proximity": "High",
+      "exp5_oracle": 0.817,
+      "exp5_non_oracle": 0.779,
+      "agl_line": {"slope": 0.905, "intercept": 0.248, "r2": 0.954},
+      "acl_line": {"slope": 2.193, "intercept": -0.744, "r2": 0.425},
+      "entropy": {"id": 0.496, "ood": 0.469, "delta": -0.027},
+      "detection": {
+        "labeled": "DIVERGE",
+        "label_free": "AGREE_ERM_WORKS",
+        "n_diverging_lb": 15,
+        "n_diverging_lf": 13,
+        "frac_div_lf": 0.65,
+        "erm_struggling": false
+      },
+      "results": {
+        "standard_erm_id_val": 0.817,
+        "standard_irm_id_val": 0.804,
+        "new_labeled_pre_tta": 0.492,
+        "new_labeled_post_tta": 0.492,
+        "new_lf_pre_tta": 0.872,
+        "new_lf_post_tta": 0.893
+      },
+      "time_min": 93.3
+    },
+    "C": {
+      "e_train": [0.1, 0.5],
+      "diversity": "High",
+      "proximity": "Low",
+      "exp5_oracle": 0.717,
+      "exp5_non_oracle": 0.694,
+      "agl_line": {"slope": 0.900, "intercept": -0.379, "r2": 0.811},
+      "acl_line": {"slope": 2.577, "intercept": -1.161, "r2": 0.855},
+      "entropy": {"id": 0.475, "ood": 0.571, "delta": 0.096},
+      "detection": {
+        "labeled": "DIVERGE",
+        "label_free": "AGREE_NO_DIVERGE",
+        "n_diverging_lb": 16,
+        "n_diverging_lf": 1,
+        "frac_div_lf": 0.05,
+        "erm_struggling": true
+      },
+      "results": {
+        "standard_erm_id_val": 0.546,
+        "standard_irm_id_val": 0.689,
+        "new_labeled_pre_tta": 0.493,
+        "new_labeled_post_tta": 0.493,
+        "new_lf_pre_tta": 0.690,
+        "new_lf_post_tta": 0.862
+      },
+      "time_min": 80.0
+    },
+    "D": {
+      "e_train": [0.1, 0.8],
+      "diversity": "High",
+      "proximity": "High",
+      "exp5_oracle": 0.728,
+      "exp5_non_oracle": 0.726,
+      "agl_line": {"slope": 0.849, "intercept": 0.012, "r2": 0.767},
+      "acl_line": {"slope": 0.892, "intercept": 0.072, "r2": 0.754},
+      "entropy": {"id": 0.561, "ood": 0.573, "delta": 0.012},
+      "detection": {
+        "labeled": "AGREE_ERM_WORKS",
+        "label_free": "AGREE_NO_DIVERGE",
+        "n_diverging_lb": 1,
+        "n_diverging_lf": 0,
+        "frac_div_lf": 0.00,
+        "erm_struggling": true
+      },
+      "results": {
+        "standard_erm_id_val": 0.714,
+        "standard_irm_id_val": 0.712,
+        "new_labeled_pre_tta": 0.716,
+        "new_labeled_post_tta": 0.893,
+        "new_lf_pre_tta": 0.716,
+        "new_lf_post_tta": 0.893
+      },
+      "time_min": 82.0
+    }
+  },
+  "summary": {
+    "note": "pre_tta = leaderboard 1 comparable, post_tta = leaderboard 2 comparable",
+    "table": {
+      "A": {"exp5_oracle": "67.6%", "exp5_non_oracle": "10.6%", "lab_pre": "27.9%", "lab_post": "27.9%", "lf_pre": "10.7%", "lf_post": "10.7%"},
+      "B": {"exp5_oracle": "81.7%", "exp5_non_oracle": "77.9%", "lab_pre": "49.2%", "lab_post": "49.2%", "lf_pre": "87.2%", "lf_post": "89.3%"},
+      "C": {"exp5_oracle": "71.7%", "exp5_non_oracle": "69.4%", "lab_pre": "49.3%", "lab_post": "49.3%", "lf_pre": "69.0%", "lf_post": "86.2%"},
+      "D": {"exp5_oracle": "72.8%", "exp5_non_oracle": "72.6%", "lab_pre": "71.6%", "lab_post": "89.3%", "lf_pre": "71.6%", "lf_post": "89.3%"}
+    }
+  }
+}
