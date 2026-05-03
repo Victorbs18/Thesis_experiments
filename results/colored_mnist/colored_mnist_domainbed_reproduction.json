@@ -1,0 +1,65 @@
+{
+  "experiment": "ColoredMNIST DomainBed Reproduction",
+  "settings": {
+    "backbone": "MNIST_CNN",
+    "n_hparams": 5,
+    "n_trials": 1,
+    "n_steps": 2001,
+    "dataset": "ColoredMNIST",
+    "environments": ["+90% (e=0.1)", "+80% (e=0.2)", "-90% (e=0.9)"],
+    "test_env": "-90% (e=0.9)"
+  },
+  "first_run": {
+    "note": "Single test env -90%, 5 configs x 1 seed x 1001 steps",
+    "ERM": {
+      "trials": [
+        {"hp": 0, "env0_in": 0.899, "env0_out": 0.898, "env1_in": 0.792, "env1_out": 0.796, "env2_in": 0.112, "env2_out": 0.120},
+        {"hp": 1, "env0_in": 0.900, "env0_out": 0.901, "env1_in": 0.792, "env1_out": 0.799, "env2_in": 0.100, "env2_out": 0.108},
+        {"hp": 2, "env0_in": 0.901, "env0_out": 0.901, "env1_in": 0.792, "env1_out": 0.799, "env2_in": 0.099, "env2_out": 0.107},
+        {"hp": 3, "env0_in": 0.900, "env0_out": 0.901, "env1_in": 0.792, "env1_out": 0.798, "env2_in": 0.104, "env2_out": 0.113},
+        {"hp": 4, "env0_in": 0.900, "env0_out": 0.900, "env1_in": 0.792, "env1_out": 0.799, "env2_in": 0.102, "env2_out": 0.110}
+      ],
+      "iid": {"test": 0.099, "val": 0.850},
+      "loo": {"test": 0.099, "val": 0.846},
+      "oracle": {"test": 0.112, "val": 0.120}
+    },
+    "IRM": {
+      "trials": [
+        {"hp": 0, "env0_in": 0.558, "env0_out": 0.553, "env1_in": 0.561, "env1_out": 0.556, "env2_in": 0.589, "env2_out": 0.588},
+        {"hp": 1, "env0_in": 0.901, "env0_out": 0.901, "env1_in": 0.792, "env1_out": 0.799, "env2_in": 0.099, "env2_out": 0.107},
+        {"hp": 2, "env0_in": 0.897, "env0_out": 0.895, "env1_in": 0.790, "env1_out": 0.797, "env2_in": 0.116, "env2_out": 0.123},
+        {"hp": 3, "env0_in": 0.901, "env0_out": 0.901, "env1_in": 0.792, "env1_out": 0.799, "env2_in": 0.099, "env2_out": 0.107},
+        {"hp": 4, "env0_in": 0.493, "env0_out": 0.494, "env1_in": 0.495, "env1_out": 0.499, "env2_in": 0.496, "env2_out": 0.497}
+      ],
+      "iid": {"test": 0.099, "val": 0.850},
+      "loo": {"test": 0.099, "val": 0.846},
+      "oracle": {"test": 0.589, "val": 0.588}
+    }
+  },
+  "full_run_all_envs": {
+    "note": "All 3 test envs, 5 configs x 1 seed x 2001 steps",
+    "ERM": {
+      "+90%": {"iid": {"test": 0.694, "val": 0.721}, "loo": {"test": 0.700, "val": 0.728}, "oracle": {"test": 0.700, "val": 0.702}, "domainbed_ref_iid": 0.717},
+      "+80%": {"iid": {"test": 0.728, "val": 0.723}, "loo": {"test": 0.728, "val": 0.729}, "oracle": {"test": 0.728, "val": 0.721}, "domainbed_ref_iid": 0.729},
+      "-90%": {"iid": {"test": 0.102, "val": 0.848}, "loo": {"test": 0.102, "val": 0.849}, "oracle": {"test": 0.124, "val": 0.120}, "domainbed_ref_iid": 0.100}
+    },
+    "IRM": {
+      "+90%": {"iid": {"test": 0.696, "val": 0.715}, "loo": {"test": 0.696, "val": 0.726}, "oracle": {"test": 0.696, "val": 0.695}, "domainbed_ref_iid": 0.725},
+      "+80%": {"iid": {"test": 0.717, "val": 0.713}, "loo": {"test": 0.717, "val": 0.717}, "oracle": {"test": 0.717, "val": 0.722}, "domainbed_ref_iid": 0.733},
+      "-90%": {"iid": {"test": 0.102, "val": 0.848}, "loo": {"test": 0.102, "val": 0.849}, "oracle": {"test": 0.400, "val": 0.388}, "domainbed_ref_iid": 0.102}
+    },
+    "summary_iid": {
+      "ERM": {"avg": 0.508},
+      "IRM": {"avg": 0.505}
+    },
+    "domainbed_reference_iid": {
+      "ERM": {"+90%": 0.717, "+80%": 0.729, "-90%": 0.100, "avg": 0.515},
+      "IRM": {"+90%": 0.725, "+80%": 0.733, "-90%": 0.102, "avg": 0.520}
+    },
+    "domainbed_reference_oracle": {
+      "ERM": {"+90%": 0.718, "+80%": 0.729, "-90%": 0.287, "avg": 0.578},
+      "IRM": {"+90%": 0.720, "+80%": 0.725, "-90%": 0.585, "avg": 0.677}
+    },
+    "total_time_min": 26.9
+  }
+}
