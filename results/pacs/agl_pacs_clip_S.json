@@ -1,0 +1,40 @@
+{
+  "env": "S",
+  "detection": {
+    "labeled": "AGREE_IRM_FAILS",
+    "label_free": "AGREE_IRM_FAILS"
+  },
+  "agl": {
+    "slope": 1.1987535860535923,
+    "intercept": -0.22942022080596658,
+    "r2": 0.1263953196834264
+  },
+  "acl": {
+    "slope": 1.346804370603219,
+    "intercept": -0.408621463852732,
+    "r2": 0.2791234140715156
+  },
+  "entropy": {
+    "id": 0.05981249362230301,
+    "ood": 0.13769739866256714,
+    "delta": 0.07788490504026413
+  },
+  "divergence": {
+    "n_div_lf": 3,
+    "frac_div_lf": 0.6,
+    "n_div_lb": 0
+  },
+  "results": {
+    "domainbed_erm": 0.7929999999999999,
+    "domainbed_irm": 0.7609999999999999,
+    "clip_erm_base": 0.884,
+    "clip_irm_base": 0.902,
+    "coarse_erm": 0.9185750636132316,
+    "coarse_irm": 0.9007633587786259,
+    "labeled_pre": 0.9101552557902775,
+    "labeled_post": 0.9101552557902775,
+    "lf_pre": 0.8778315092898956,
+    "lf_post": 0.8897938406719267
+  },
+  "time_min": 188.25765415827433
+}
