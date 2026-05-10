@@ -1,0 +1,432 @@
+{
+  "experiment": "Camelyon17 ResNet50+CLIP ERM/IRM baseline",
+  "test_env": 2,
+  "settings": {
+    "n_hparams": 5,
+    "n_trials": 1,
+    "n_steps": 2001,
+    "selection": "train-domain val (IID)",
+    "note": "Test hospital 2. Env 2 chosen per Salaudeen et al. (2025) \u2014 highest negative ACL correlation among Camelyon splits."
+  },
+  "results": {
+    "resnet50": {
+      "ERM": {
+        "results": [
+          {
+            "hp": {
+              "lr": 0.0001252065381499946,
+              "weight_decay": 0.0007257005721594274,
+              "batch_size": 64,
+              "dropout": 0.1
+            },
+            "mean_id_val": 0.9859392272641484,
+            "mean_ood_acc": 0.9160533308251229,
+            "best_ood_acc": 0.9160533308251229,
+            "trial_id_vals": [
+              0.9859392272641484
+            ],
+            "trial_ood_accs": [
+              0.9160533308251229
+            ]
+          },
+          {
+            "hp": {
+              "lr": 0.000176655593656432,
+              "weight_decay": 3.447679044520655e-05,
+              "batch_size": 64,
+              "dropout": 0.5
+            },
+            "mean_id_val": 0.9888511418479873,
+            "mean_ood_acc": 0.8929150892374257,
+            "best_ood_acc": 0.8929150892374257,
+            "trial_id_vals": [
+              0.9888511418479873
+            ],
+            "trial_ood_accs": [
+              0.8929150892374257
+            ]
+          },
+          {
+            "hp": {
+              "lr": 1.298452164375177e-05,
+              "weight_decay": 1.2320410503562709e-05,
+              "batch_size": 64,
+              "dropout": 0.5
+            },
+            "mean_id_val": 0.9843484591118661,
+            "mean_ood_acc": 0.8835328144472923,
+            "best_ood_acc": 0.8835328144472923,
+            "trial_id_vals": [
+              0.9843484591118661
+            ],
+            "trial_ood_accs": [
+              0.8835328144472923
+            ]
+          },
+          {
+            "hp": {
+              "lr": 0.00042105367042118147,
+              "weight_decay": 8.315889109899286e-05,
+              "batch_size": 64,
+              "dropout": 0.1
+            },
+            "mean_id_val": 0.9859122650920759,
+            "mean_ood_acc": 0.9431772756131399,
+            "best_ood_acc": 0.9431772756131399,
+            "trial_id_vals": [
+              0.9859122650920759
+            ],
+            "trial_ood_accs": [
+              0.9431772756131399
+            ]
+          },
+          {
+            "hp": {
+              "lr": 0.00047006457927320505,
+              "weight_decay": 2.2365810539197545e-05,
+              "batch_size": 32,
+              "dropout": 0.0
+            },
+            "mean_id_val": 0.983000350508237,
+            "mean_ood_acc": 0.9079761092952713,
+            "best_ood_acc": 0.9079761092952713,
+            "trial_id_vals": [
+              0.983000350508237
+            ],
+            "trial_ood_accs": [
+              0.9079761092952713
+            ]
+          }
+        ],
+        "iid": {
+          "test": 0.8929150892374257,
+          "val": 0.9888511418479873
+        },
+        "oracle": {
+          "test": 0.9431772756131399
+        },
+        "time_min": 41.39860354661941
+      },
+      "IRM": {
+        "results": [
+          {
+            "hp": {
+              "lr": 0.0004626362841475588,
+              "weight_decay": 0.0012960656597279722,
+              "batch_size": 64,
+              "dropout": 0.0,
+              "irm_lambda": 74423.49368719808,
+              "irm_penalty_anneal_iters": 1572
+            },
+            "mean_id_val": 0.9309363962360808,
+            "mean_ood_acc": 0.8681543490018107,
+            "best_ood_acc": 0.8681543490018107,
+            "trial_id_vals": [
+              0.9309363962360808
+            ],
+            "trial_ood_accs": [
+              0.8681543490018107
+            ]
+          },
+          {
+            "hp": {
+              "lr": 8.374496868436807e-05,
+              "weight_decay": 0.001324697464746844,
+              "batch_size": 32,
+              "dropout": 0.0,
+              "irm_lambda": 310.54086075930155,
+              "irm_penalty_anneal_iters": 141
+            },
+            "mean_id_val": 0.9007387635147888,
+            "mean_ood_acc": 0.8057939661861876,
+            "best_ood_acc": 0.8057939661861876,
+            "trial_id_vals": [
+              0.9007387635147888
+            ],
+            "trial_ood_accs": [
+              0.8057939661861876
+            ]
+          },
+          {
+            "hp": {
+              "lr": 0.00032902678102626596,
+              "weight_decay": 2.652347535167729e-06,
+              "batch_size": 64,
+              "dropout": 0.5,
+              "irm_lambda": 4419.795105236874,
+              "irm_penalty_anneal_iters": 66
+            },
+            "mean_id_val": 0.8274016554773652,
+            "mean_ood_acc": 0.8791003362569662,
+            "best_ood_acc": 0.8791003362569662,
+            "trial_id_vals": [
+              0.8274016554773652
+            ],
+            "trial_ood_accs": [
+              0.8791003362569662
+            ]
+          },
+          {
+            "hp": {
+              "lr": 0.00013704648392849012,
+              "weight_decay": 1.1889379831773005e-06,
+              "batch_size": 64,
+              "dropout": 0.1,
+              "irm_lambda": 470.5159350400543,
+              "irm_penalty_anneal_iters": 293
+            },
+            "mean_id_val": 0.9370163660384481,
+            "mean_ood_acc": 0.6500340959860794,
+            "best_ood_acc": 0.6500340959860794,
+            "trial_id_vals": [
+              0.9370163660384481
+            ],
+            "trial_ood_accs": [
+              0.6500340959860794
+            ]
+          },
+          {
+            "hp": {
+              "lr": 0.0007717846862118064,
+              "weight_decay": 0.000533680330275671,
+              "batch_size": 32,
+              "dropout": 0.0,
+              "irm_lambda": 25947.259726504653,
+              "irm_penalty_anneal_iters": 2
+            },
+            "mean_id_val": 0.9282266979427862,
+            "mean_ood_acc": 0.8724574975897665,
+            "best_ood_acc": 0.8724574975897665,
+            "trial_id_vals": [
+              0.9282266979427862
+            ],
+            "trial_ood_accs": [
+              0.8724574975897665
+            ]
+          }
+        ],
+        "iid": {
+          "test": 0.6500340959860794,
+          "val": 0.9370163660384481
+        },
+        "oracle": {
+          "test": 0.8791003362569662
+        },
+        "time_min": 37.43919347524643
+      }
+    },
+    "clip": {
+      "ERM": {
+        "results": [
+          {
+            "hp": {
+              "lr": 8.701981095758303e-05,
+              "weight_decay": 0.0004097888554188056,
+              "batch_size": 64,
+              "dropout": 0.5
+            },
+            "mean_id_val": 0.9804389441613416,
+            "mean_ood_acc": 0.9463164577797635,
+            "best_ood_acc": 0.9463164577797635,
+            "trial_id_vals": [
+              0.9804389441613416
+            ],
+            "trial_ood_accs": [
+              0.9463164577797635
+            ]
+          },
+          {
+            "hp": {
+              "lr": 5.203605139233059e-06,
+              "weight_decay": 0.0010063396049315295,
+              "batch_size": 64,
+              "dropout": 0.1
+            },
+            "mean_id_val": 0.9688452101701313,
+            "mean_ood_acc": 0.9276577233287088,
+            "best_ood_acc": 0.9276577233287088,
+            "trial_id_vals": [
+              0.9688452101701313
+            ],
+            "trial_ood_accs": [
+              0.9276577233287088
+            ]
+          },
+          {
+            "hp": {
+              "lr": 4.46780755335673e-06,
+              "weight_decay": 1.42462875468743e-06,
+              "batch_size": 64,
+              "dropout": 0.0
+            },
+            "mean_id_val": 0.9660815875326917,
+            "mean_ood_acc": 0.9390857572836081,
+            "best_ood_acc": 0.9390857572836081,
+            "trial_id_vals": [
+              0.9660815875326917
+            ],
+            "trial_ood_accs": [
+              0.9390857572836081
+            ]
+          },
+          {
+            "hp": {
+              "lr": 8.277487569782089e-05,
+              "weight_decay": 0.0004084710370903223,
+              "batch_size": 32,
+              "dropout": 0.0
+            },
+            "mean_id_val": 0.9758014505648575,
+            "mean_ood_acc": 0.9504785195287699,
+            "best_ood_acc": 0.9504785195287699,
+            "trial_id_vals": [
+              0.9758014505648575
+            ],
+            "trial_ood_accs": [
+              0.9504785195287699
+            ]
+          },
+          {
+            "hp": {
+              "lr": 2.0240286281332793e-05,
+              "weight_decay": 1.0307810128023626e-05,
+              "batch_size": 64,
+              "dropout": 0.0
+            },
+            "mean_id_val": 0.9784302623419343,
+            "mean_ood_acc": 0.9449173466268488,
+            "best_ood_acc": 0.9449173466268488,
+            "trial_id_vals": [
+              0.9784302623419343
+            ],
+            "trial_ood_accs": [
+              0.9449173466268488
+            ]
+          }
+        ],
+        "iid": {
+          "test": 0.9463164577797635,
+          "val": 0.9804389441613416
+        },
+        "oracle": {
+          "test": 0.9504785195287699
+        },
+        "time_min": 47.518876628081
+      },
+      "IRM": {
+        "results": [
+          {
+            "hp": {
+              "lr": 3.0821316414429504e-06,
+              "weight_decay": 4.32392681428005e-06,
+              "batch_size": 64,
+              "dropout": 0.1,
+              "irm_lambda": 866.917034659781,
+              "irm_penalty_anneal_iters": 3
+            },
+            "mean_id_val": 0.47346922268057917,
+            "mean_ood_acc": 0.34540409622122414,
+            "best_ood_acc": 0.34540409622122414,
+            "trial_id_vals": [
+              0.47346922268057917
+            ],
+            "trial_ood_accs": [
+              0.34540409622122414
+            ]
+          },
+          {
+            "hp": {
+              "lr": 2.47266182197764e-06,
+              "weight_decay": 2.9846999797850814e-05,
+              "batch_size": 64,
+              "dropout": 0.5,
+              "irm_lambda": 0.3824790524379861,
+              "irm_penalty_anneal_iters": 2247
+            },
+            "mean_id_val": 0.9614440939362076,
+            "mean_ood_acc": 0.9292214357937311,
+            "best_ood_acc": 0.9292214357937311,
+            "trial_id_vals": [
+              0.9614440939362076
+            ],
+            "trial_ood_accs": [
+              0.9292214357937311
+            ]
+          },
+          {
+            "hp": {
+              "lr": 1.5566709318481194e-06,
+              "weight_decay": 0.008050778165087018,
+              "batch_size": 32,
+              "dropout": 0.5,
+              "irm_lambda": 72538.15900686051,
+              "irm_penalty_anneal_iters": 262
+            },
+            "mean_id_val": 0.848418668607943,
+            "mean_ood_acc": 0.6751945822653843,
+            "best_ood_acc": 0.6751945822653843,
+            "trial_id_vals": [
+              0.848418668607943
+            ],
+            "trial_ood_accs": [
+              0.6751945822653843
+            ]
+          },
+          {
+            "hp": {
+              "lr": 3.009727377614729e-05,
+              "weight_decay": 1.4346671987806317e-06,
+              "batch_size": 32,
+              "dropout": 0.5,
+              "irm_lambda": 14.34388464132672,
+              "irm_penalty_anneal_iters": 83
+            },
+            "mean_id_val": 0.9582895198037154,
+            "mean_ood_acc": 0.9410139440825829,
+            "best_ood_acc": 0.9410139440825829,
+            "trial_id_vals": [
+              0.9582895198037154
+            ],
+            "trial_ood_accs": [
+              0.9410139440825829
+            ]
+          },
+          {
+            "hp": {
+              "lr": 2.384088460216906e-05,
+              "weight_decay": 0.0033258568839087182,
+              "batch_size": 32,
+              "dropout": 0.5,
+              "irm_lambda": 246.11223231872012,
+              "irm_penalty_anneal_iters": 2886
+            },
+            "mean_id_val": 0.9710291461080105,
+            "mean_ood_acc": 0.9444117854539469,
+            "best_ood_acc": 0.9444117854539469,
+            "trial_id_vals": [
+              0.9710291461080105
+            ],
+            "trial_ood_accs": [
+              0.9444117854539469
+            ]
+          }
+        ],
+        "iid": {
+          "test": 0.9444117854539469,
+          "val": 0.9710291461080105
+        },
+        "oracle": {
+          "test": 0.9444117854539469
+        },
+        "time_min": 40.88041054010391
+      }
+    }
+  },
+  "wilds_ref": {
+    "ResNet50": {
+      "ERM": 70.3,
+      "IRM": 64.2
+    }
+  },
+  "total_time_min": 167.23708419005075
+}
