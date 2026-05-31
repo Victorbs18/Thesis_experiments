@@ -1,2 +1,2 @@
-# Thesis Experiments — Agreement-based Diagnostics for Domain Generalization
+##  Thesis Experiments: Agreement-based Diagnostics for Domain Generalization
 
