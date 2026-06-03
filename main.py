@@ -4,7 +4,8 @@ Single entry point for all domain generalization experiments.
 """
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'DomainBed'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DomainBed'))
 
 import argparse
 import json
