@@ -95,7 +95,7 @@ def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0):
 
     print(f"ColoredMNIST loaded:")
     for i, (e, env) in enumerate(zip(environments, envs)):
-        marker = '← test' if i == 2 else ''
+        marker = ': test' if i == 2 else ''
         print(f"  env{i} (e={e}): {len(env['images'])} samples {marker}")
 
     envs_splits = [split_env(env, holdout_frac, seed) for env in envs]
