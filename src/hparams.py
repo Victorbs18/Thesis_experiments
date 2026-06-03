@@ -12,7 +12,7 @@ This list is consumed by run_sweep() in train.py.
 """
 
 import numpy as np
-from domainbed.hparams_registry import hparams as sample_hparams_domainbed
+from domainbed.hparams_registry import random_hparams as sample_hparams_domainbed
 
 
 class RandomSearch:
