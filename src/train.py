@@ -38,7 +38,7 @@ from src.hparams import HP_SEARCH_METHODS
 # Infinite data loader
 
 
-def make_infinite_loader(env, batch_size):
+def make_infinite_loader(env, batch_size,device):
     """
     Infinite loader over an in-memory environment dict.
     
@@ -47,7 +47,8 @@ def make_infinite_loader(env, batch_size):
     Keeps all data in memory.
     Shuffles every epoch automatically.
     """
-    x, y = env['images'], env['labels']
+    x = env['images'].to(device)  
+    y = env['labels'].to(device)
     n    = len(x)
     while True:
         perm = torch.randperm(n)
@@ -140,7 +141,7 @@ def run_single(
 
     # Infinite loaders: data stays in memory
     loaders = [
-        make_infinite_loader(env, hp['batch_size'])
+        make_infinite_loader(env, hp['batch_size'],device)
         for env in train_envs
     ]
 
@@ -148,10 +149,7 @@ def run_single(
     t0 = time.time()
     for step in range(n_steps):
         algorithm.train()
-        minibatches = [
-            (x.to(device), y.to(device))
-            for x, y in [next(loader) for loader in loaders]
-        ]
+        minibatches = [next(loader) for loader in loaders]
         algorithm.update(minibatches)
     train_time = time.time() - t0
 
