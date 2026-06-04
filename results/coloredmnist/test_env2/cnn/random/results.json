@@ -1,12 +1,12 @@
 {
   "ERM": {
     "IIDAccuracySelectionMethod": {
-      "env0_mean": 0.8840548649807115,
-      "env0_std": 0.0003030890618030527,
-      "env1_mean": 0.8030432918988427,
-      "env1_std": 0.0003499771028408472,
-      "env2_mean": 0.09544220602943276,
-      "env2_std": 0.0008082374981415,
+      "env0_mean": 0.8999142734676382,
+      "env0_std": 0.0001749885514204236,
+      "env1_mean": 0.7922560365766538,
+      "env1_std": 0.00020205937453536847,
+      "env2_mean": 0.09594227746820976,
+      "env2_std": 0.0007072078108738181,
       "hparams_seed": 19,
       "hparams": {
         "data_augmentation": true,
@@ -28,42 +28,13 @@
       }
     },
     "OracleSelectionMethod": {
-      "env0_mean": 0.8542648949849978,
-      "env0_std": 0.010090332113034388,
-      "env1_mean": 0.7872553221888842,
-      "env1_std": 0.00961216641894796,
-      "env2_mean": 0.2361051578796971,
-      "env2_std": 0.05294562912945486,
-      "hparams_seed": 14,
-      "hparams": {
-        "data_augmentation": true,
-        "resnet18": false,
-        "resnet50_augmix": true,
-        "dinov2": false,
-        "vit": false,
-        "vit_attn_tune": false,
-        "freeze_bn": false,
-        "lars": false,
-        "linear_steps": 500,
-        "resnet_dropout": 0.1,
-        "vit_dropout": 0.0,
-        "class_balanced": false,
-        "nonlinear_classifier": false,
-        "lr": 0.00015824774103948214,
-        "weight_decay": 0.0,
-        "batch_size": 76
-      }
-    }
-  },
-  "IRM": {
-    "IIDAccuracySelectionMethod": {
-      "env0_mean": 0.8823403343334763,
-      "env0_std": 0.0014323430244151476,
-      "env1_mean": 0.8025432204600658,
-      "env1_std": 0.0006624959633873278,
-      "env2_mean": 0.10301471638805544,
-      "env2_std": 0.00636085991986057,
-      "hparams_seed": 2,
+      "env0_mean": 0.8574082011715959,
+      "env0_std": 0.0035055991274140115,
+      "env1_mean": 0.7708244034862123,
+      "env1_std": 0.0017701831252127662,
+      "env2_mean": 0.2513930561508787,
+      "env2_std": 0.005782570751492523,
+      "hparams_seed": 8,
       "hparams": {
         "data_augmentation": true,
         "resnet18": false,
@@ -75,24 +46,53 @@
         "lars": false,
         "linear_steps": 500,
         "resnet_dropout": 0.5,
-        "vit_dropout": 0.0,
+        "vit_dropout": 0.1,
         "class_balanced": false,
         "nonlinear_classifier": false,
-        "irm_lambda": 1.4767964154398219,
-        "irm_penalty_anneal_iters": 1003,
-        "lr": 4.670599081369679e-05,
+        "lr": 0.0009810085079301348,
         "weight_decay": 0.0,
-        "batch_size": 12
+        "batch_size": 271
+      }
+    }
+  },
+  "IRM": {
+    "IIDAccuracySelectionMethod": {
+      "env0_mean": 0.8913416202314616,
+      "env0_std": 0.01227791306249679,
+      "env1_mean": 0.7884697813973425,
+      "env1_std": 0.005001734837609434,
+      "env2_mean": 0.13823403343334761,
+      "env2_std": 0.061681664821795,
+      "hparams_seed": 16,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.5,
+        "vit_dropout": 0.5,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "irm_lambda": 7.011169571380348,
+        "irm_penalty_anneal_iters": 4980,
+        "lr": 0.0018135905503660723,
+        "weight_decay": 0.0,
+        "batch_size": 32
       }
     },
     "OracleSelectionMethod": {
-      "env0_mean": 0.7630375767966852,
-      "env0_std": 0.006768989046935119,
-      "env1_mean": 0.7333190455779398,
-      "env1_std": 0.005197876771990641,
-      "env2_mean": 0.6345906558079726,
-      "env2_std": 0.012411857895902524,
-      "hparams_seed": 12,
+      "env0_mean": 0.5179311330190027,
+      "env0_std": 0.028053526540991292,
+      "env1_mean": 0.5140734390627233,
+      "env1_std": 0.018136728348328232,
+      "env2_mean": 0.6040148592656094,
+      "env2_std": 0.07564614278882326,
+      "hparams_seed": 19,
       "hparams": {
         "data_augmentation": true,
         "resnet18": false,
@@ -107,11 +107,11 @@
         "vit_dropout": 0.1,
         "class_balanced": false,
         "nonlinear_classifier": false,
-        "irm_lambda": 438.8917612693128,
-        "irm_penalty_anneal_iters": 1372,
-        "lr": 0.00010136763297701341,
+        "irm_lambda": 5545.277953874569,
+        "irm_penalty_anneal_iters": 2036,
+        "lr": 0.00018170281896381986,
         "weight_decay": 0.0,
-        "batch_size": 451
+        "batch_size": 24
       }
     }
   }
