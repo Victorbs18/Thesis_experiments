@@ -188,16 +188,22 @@ def run_single(
         algorithm.eval()
         with torch.no_grad():
 
-            # Save predictions on ALL env out splits
+            # Save logits/probs on ALL env out splits
             for i, (in_env, out_env) in enumerate(all_envs):
-                x     = out_env['images'].to(device)
-                preds = algorithm.predict(x).argmax(1).cpu().numpy()
-                fname = (f"{algorithm_class.__name__}"
-                            f"_hpseed{hparams_seed}"
-                            f"_trial{trial_seed}"
-                            f"_env{i}_preds.npy")
-                np.save(os.path.join(save_dir, fname), preds)
-                record[f'env{i}_pred_path'] = os.path.join(save_dir, fname)
+                x      = out_env['images'].to(device)
+                logits = algorithm.predict(x)
+                preds  = logits.argmax(1).cpu().numpy()
+                probs  = torch.softmax(logits, dim=1).cpu().numpy()
+                
+                np.save(os.path.join(save_dir,
+                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_preds.npy"), preds)
+                np.save(os.path.join(save_dir,
+                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_probs.npy"), probs)
+                
+                record[f'env{i}_pred_path'] = os.path.join(save_dir, 
+                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_preds.npy")
+                record[f'env{i}_prob_path'] = os.path.join(save_dir,
+                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_probs.npy")
 
             # Save feature vectors on test env out split only
             _, test_out_env = all_envs[test_env_idx]
