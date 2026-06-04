@@ -1,38 +1,118 @@
 {
   "ERM": {
     "IIDAccuracySelectionMethod": {
-      "env0_mean": 0.9005572224603515,
-      "env0_std": 0.0004629761893419307,
-      "env1_mean": 0.8019717102443206,
-      "env1_std": 0.0,
-      "env2_mean": 0.10130018574082011,
-      "env2_std": 0.0014251991243934828
+      "env0_mean": 0.8840548649807115,
+      "env0_std": 0.0003030890618030527,
+      "env1_mean": 0.8030432918988427,
+      "env1_std": 0.0003499771028408472,
+      "env2_mean": 0.09544220602943276,
+      "env2_std": 0.0008082374981415,
+      "hparams_seed": 19,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.1,
+        "vit_dropout": 0.1,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "lr": 0.00018170281896381986,
+        "weight_decay": 0.0,
+        "batch_size": 24
+      }
     },
     "OracleSelectionMethod": {
-      "env0_mean": 0.8446920988712674,
-      "env0_std": 0.008396411922891374,
-      "env1_mean": 0.7769681383054722,
-      "env1_std": 0.0011385467531439706,
-      "env2_mean": 0.27646806686669523,
-      "env2_std": 0.013951976681320009
+      "env0_mean": 0.8542648949849978,
+      "env0_std": 0.010090332113034388,
+      "env1_mean": 0.7872553221888842,
+      "env1_std": 0.00961216641894796,
+      "env2_mean": 0.2361051578796971,
+      "env2_std": 0.05294562912945486,
+      "hparams_seed": 14,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.1,
+        "vit_dropout": 0.0,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "lr": 0.00015824774103948214,
+        "weight_decay": 0.0,
+        "batch_size": 76
+      }
     }
   },
   "IRM": {
     "IIDAccuracySelectionMethod": {
-      "env0_mean": 0.7678239748535506,
-      "env0_std": 0.18801624800516717,
-      "env1_mean": 0.7021003000428632,
-      "env1_std": 0.14123950280022762,
-      "env2_mean": 0.2304614944992142,
-      "env2_std": 0.18468226832533347
+      "env0_mean": 0.8823403343334763,
+      "env0_std": 0.0014323430244151476,
+      "env1_mean": 0.8025432204600658,
+      "env1_std": 0.0006624959633873278,
+      "env2_mean": 0.10301471638805544,
+      "env2_std": 0.00636085991986057,
+      "hparams_seed": 2,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.5,
+        "vit_dropout": 0.0,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "irm_lambda": 1.4767964154398219,
+        "irm_penalty_anneal_iters": 1003,
+        "lr": 4.670599081369679e-05,
+        "weight_decay": 0.0,
+        "batch_size": 12
+      }
     },
     "OracleSelectionMethod": {
-      "env0_mean": 0.641020145735105,
-      "env0_std": 0.022486539518705478,
-      "env1_mean": 0.6383769109872839,
-      "env1_std": 0.014930875291527729,
-      "env2_mean": 0.6493070438634091,
-      "env2_std": 0.05749973979974109
+      "env0_mean": 0.7630375767966852,
+      "env0_std": 0.006768989046935119,
+      "env1_mean": 0.7333190455779398,
+      "env1_std": 0.005197876771990641,
+      "env2_mean": 0.6345906558079726,
+      "env2_std": 0.012411857895902524,
+      "hparams_seed": 12,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.1,
+        "vit_dropout": 0.1,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "irm_lambda": 438.8917612693128,
+        "irm_penalty_anneal_iters": 1372,
+        "lr": 0.00010136763297701341,
+        "weight_decay": 0.0,
+        "batch_size": 451
+      }
     }
   }
 }
