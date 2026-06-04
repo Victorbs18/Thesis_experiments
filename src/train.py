@@ -255,11 +255,13 @@ def run_sweep(
 
             for trial_seed in range(n_trials):
                 done += 1
+                hp_str = ' '.join(f"{k}={v:.3g}" for k, v in hp.items())
                 print(
                     f"[{done}/{total}] {algorithm_class.__name__} "
                     f"hp={hparams_seed} trial={trial_seed}",
                     flush=True,
                 )
+                print(f"  hparams: {hp_str}", flush=True)
 
                 record = run_single(
                     algorithm_class = algorithm_class,
