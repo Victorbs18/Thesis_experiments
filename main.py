@@ -63,13 +63,14 @@ def parse_args():
     parser.add_argument('--output_dir',    type=str, default='./results')
     parser.add_argument('--search_method', type=str, default='random',
                         choices=['random', 'grid', 'bayesian'])
+    parser.add_argument('--backbone', type=str, default='cnn',
+                    choices=['cnn', 'resnet50', 'clip'])
     return parser.parse_args()
 
 
 # Results printing
 
 def print_results(all_results, dataset_cfg, algo_names, dataset_name):
-    """Print summary table in DomainBed format."""
     env_names  = dataset_cfg['env_names']
     n_envs     = dataset_cfg['n_envs']
     ref        = dataset_cfg.get('domainbed_ref', {})
@@ -83,9 +84,9 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
         method = SELECTION_METHODS[sel_name]
         print(f"\n  Selection: {method.name}")
         print(f"  {'Algorithm':<12} "
-              + " ".join(f"{e:>10}" for e in env_names)
+              + " ".join(f"{e:>16}" for e in env_names)
               + f"  {'Ref (IID)':>10}")
-        print(f"  {'─'*65}")
+        print(f"  {'─'*75}")
 
         for algo_name in algo_names:
             if algo_name not in all_results:
@@ -93,14 +94,14 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
             if sel_name not in all_results[algo_name]:
                 continue
 
-            accs    = all_results[algo_name][sel_name]
-            ref_acc = ref.get(algo_name, {}).get('iid', {})
+            accs     = all_results[algo_name][sel_name]
+            ref_acc  = ref.get(algo_name, {}).get('iid', {})
             test_idx = dataset_cfg['test_env_idx']
             ref_str  = (f"{ref_acc.get(f'env{test_idx}', 0):.1f}%"
                         if ref_acc else "—")
 
             row = " ".join(
-                f"{accs.get(f'env{i}', 0)*100:>9.1f}%"
+                f"{accs[f'env{i}_mean']*100:>6.1f}±{accs[f'env{i}_std']*100:>4.1f}%"
                 for i in range(n_envs)
             )
             print(f"  {algo_name:<12} {row}  {ref_str:>10}")
@@ -120,8 +121,7 @@ def main():
                                   else dataset_cfg['n_steps']
 
     # Output dir
-    output_dir = os.path.join(args.output_dir, args.dataset.lower())
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = os.path.join(args.output_dir,args.dataset.lower(),f'test_env{test_env_idx}',args.backbone,args.search_method)
 
     # Algorithms
     if args.algorithms is not None:
@@ -198,25 +198,32 @@ def main():
         for method in sel_methods:
             sel_name = method.__name__
 
-            # Get best HP config and its per-env accuracies
+            # Get best HP config
             hparams_accs = method.hparams_accs(algo_records)
             if not len(hparams_accs):
                 print(f"  {algo_name} [{method.name}]: no results")
                 continue
 
+            # Get all records for the selected HP config
             best_records = hparams_accs[0][1]
-            best_record  = best_records.sorted(lambda r: r['step'])[-1]
-            n_envs       = dataset_cfg['n_envs']
 
-            per_env_accs = {
-                f'env{i}': best_record[f'env{i}_out_acc']
-                for i in range(n_envs)
-            }
+            # Filter to last step only
+            last_step_records = best_records.sorted(lambda r: r['step'])
+            n_envs = dataset_cfg['n_envs']
+
+            # Compute mean ± std across trials for each env
+            per_env_accs = {}
+            for i in range(n_envs):
+                trial_accs = [r[f'env{i}_out_acc'] for r in last_step_records]
+                per_env_accs[f'env{i}_mean'] = float(np.mean(trial_accs))
+                per_env_accs[f'env{i}_std']  = float(np.std(trial_accs))
+
             all_results[algo_name][sel_name] = per_env_accs
 
-            test_acc = per_env_accs.get(f'env{test_env_idx}', 0)
+            test_mean = per_env_accs[f'env{test_env_idx}_mean']
+            test_std  = per_env_accs[f'env{test_env_idx}_std']
             print(f"  {algo_name} [{method.name}]: "
-                  f"test_acc={test_acc:.3f}")
+                f"test_acc={test_mean:.3f} ± {test_std:.3f}")
 
     # Print summary table
     print_results(all_results, dataset_cfg, algo_names, args.dataset)
