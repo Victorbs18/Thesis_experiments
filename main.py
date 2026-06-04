@@ -22,7 +22,7 @@ from domainbed.model_selection import (
 )
 
 from src.datasets import get_dataset, DATASET_CONFIGS
-from src.train import run_sweep
+from src.train import run_sweep, SKIP_HPARAMS
 
 # Algorithm registry
 
@@ -99,7 +99,10 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
             )
             hp_seed = accs.get('hparams_seed', '?')
             hp      = accs.get('hparams', {})
-            hp_str  = ' '.join(f"{k}={v:.3g}" for k, v in hp.items())
+            hp_str = ' '.join(
+                f"{k}={v:.3g}" for k, v in hp.items()
+                if k not in SKIP_HPARAMS
+            )
 
             print(f"  {algo_name:<12} {row}  seed={hp_seed}")
             print(f"  {'':12} {hp_str}")
