@@ -9,9 +9,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dom
 
 import argparse
 import json
-import os
 import time
 import numpy as np
+
 import torch
 from domainbed.lib.query import Q
 from domainbed.algorithms import ERM, IRM, GroupDRO, CORAL, DANN, VREx
@@ -71,10 +71,9 @@ def parse_args():
 # Results printing
 
 def print_results(all_results, dataset_cfg, algo_names, dataset_name):
-    env_names  = dataset_cfg['env_names']
-    n_envs     = dataset_cfg['n_envs']
-    ref        = dataset_cfg.get('domainbed_ref', {})
-    sel_names  = dataset_cfg['selection_methods']
+    env_names = dataset_cfg['env_names']
+    n_envs    = dataset_cfg['n_envs']
+    sel_names = dataset_cfg['selection_methods']
 
     print(f"\n{'='*75}")
     print(f"  RESULTS — {dataset_name}")
@@ -84,8 +83,7 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
         method = SELECTION_METHODS[sel_name]
         print(f"\n  Selection: {method.name}")
         print(f"  {'Algorithm':<12} "
-              + " ".join(f"{e:>16}" for e in env_names)
-              + f"  {'Ref (IID)':>10}")
+              + " ".join(f"{e:>16}" for e in env_names))
         print(f"  {'─'*75}")
 
         for algo_name in algo_names:
@@ -94,17 +92,17 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
             if sel_name not in all_results[algo_name]:
                 continue
 
-            accs     = all_results[algo_name][sel_name]
-            ref_acc  = ref.get(algo_name, {}).get('iid', {})
-            test_idx = dataset_cfg['test_env_idx']
-            ref_str  = (f"{ref_acc.get(f'env{test_idx}', 0):.1f}%"
-                        if ref_acc else "—")
-
-            row = " ".join(
+            accs = all_results[algo_name][sel_name]
+            row  = " ".join(
                 f"{accs[f'env{i}_mean']*100:>6.1f}±{accs[f'env{i}_std']*100:>4.1f}%"
                 for i in range(n_envs)
             )
-            print(f"  {algo_name:<12} {row}  {ref_str:>10}")
+            hp_seed = accs.get('hparams_seed', '?')
+            hp      = accs.get('hparams', {})
+            hp_str  = ' '.join(f"{k}={v:.3g}" for k, v in hp.items())
+
+            print(f"  {algo_name:<12} {row}  seed={hp_seed}")
+            print(f"  {'':12} {hp_str}")
 
 
 # Main
@@ -122,7 +120,7 @@ def main():
 
     # Output dir
     output_dir = os.path.join(args.output_dir,args.dataset.lower(),f'test_env{test_env_idx}',args.backbone,args.search_method)
-
+    os.makedirs(output_dir, exist_ok=True) 
     # Algorithms
     if args.algorithms is not None:
         algo_names = args.algorithms.split(',')
@@ -219,6 +217,10 @@ def main():
                 per_env_accs[f'env{i}_std']  = float(np.std(trial_accs))
 
             all_results[algo_name][sel_name] = per_env_accs
+            
+            best_record = last_step_records[-1]
+            per_env_accs['hparams_seed'] = best_record['args']['hparams_seed']
+            per_env_accs['hparams']      = best_record['hparams']
 
             test_mean = per_env_accs[f'env{test_env_idx}_mean']
             test_std  = per_env_accs[f'env{test_env_idx}_std']

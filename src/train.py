@@ -178,16 +178,25 @@ def run_single(
 
     # Save model weights for later analysis
     if save_dir is not None:
-        os.makedirs(save_dir, exist_ok=True)
-        fname = (
+        test_in_env, test_out_env = all_envs[test_env_idx]
+        
+        # Get raw predictions (class indices) on test out split
+        algorithm.eval()
+        with torch.no_grad():
+            x = test_out_env['images'].to(device)
+            logits = algorithm.predict(x)
+            preds = logits.argmax(1).cpu().numpy()
+        
+        pred_fname = (
             f"{algorithm_class.__name__}"
             f"_hpseed{hparams_seed}"
             f"_trial{trial_seed}"
-            f"_testenv{test_env_idx}.pt"
+            f"_testenv{test_env_idx}_preds.npy"
         )
-        model_path = os.path.join(save_dir, fname)
-        torch.save(algorithm.state_dict(), model_path)
-        record['model_path'] = model_path
+        pred_path = os.path.join(save_dir, pred_fname)
+        os.makedirs(save_dir, exist_ok=True)
+        np.save(pred_path, preds)
+        record['pred_path'] = pred_path
 
     return record
 
