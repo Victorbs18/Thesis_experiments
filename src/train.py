@@ -184,26 +184,31 @@ def run_single(
 
     # Save model weights for later analysis
     if save_dir is not None:
-        test_in_env, test_out_env = all_envs[test_env_idx]
-        
-        # Get raw predictions (class indices) on test out split
+        os.makedirs(save_dir, exist_ok=True)
         algorithm.eval()
         with torch.no_grad():
-            x = test_out_env['images'].to(device)
-            logits = algorithm.predict(x)
-            preds = logits.argmax(1).cpu().numpy()
-        
-        pred_fname = (
-            f"{algorithm_class.__name__}"
-            f"_hpseed{hparams_seed}"
-            f"_trial{trial_seed}"
-            f"_testenv{test_env_idx}_preds.npy"
-        )
-        pred_path = os.path.join(save_dir, pred_fname)
-        os.makedirs(save_dir, exist_ok=True)
-        np.save(pred_path, preds)
-        record['pred_path'] = pred_path
 
+            # Save predictions on ALL env out splits
+            for i, (in_env, out_env) in enumerate(all_envs):
+                x     = out_env['images'].to(device)
+                preds = algorithm.predict(x).argmax(1).cpu().numpy()
+                fname = (f"{algorithm_class.__name__}"
+                            f"_hpseed{hparams_seed}"
+                            f"_trial{trial_seed}"
+                            f"_env{i}_preds.npy")
+                np.save(os.path.join(save_dir, fname), preds)
+                record[f'env{i}_pred_path'] = os.path.join(save_dir, fname)
+
+            # Save feature vectors on test env out split only
+            _, test_out_env = all_envs[test_env_idx]
+            x        = test_out_env['images'].to(device)
+            features = algorithm.featurizer(x).cpu().numpy()
+            fname    = (f"{algorithm_class.__name__}"
+                        f"_hpseed{hparams_seed}"
+                        f"_trial{trial_seed}"
+                        f"_testenv{test_env_idx}_features.npy")
+            np.save(os.path.join(save_dir, fname), features)
+            record['feat_path'] = os.path.join(save_dir, fname)
     return record
 
 # Full sweep
