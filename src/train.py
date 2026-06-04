@@ -34,6 +34,12 @@ import torch
 
 from src.hparams import HP_SEARCH_METHODS
 
+SKIP_HPARAMS = {
+    'data_augmentation', 'resnet18', 'resnet50_augmix', 'dinov2',
+    'vit', 'vit_attn_tune', 'freeze_bn', 'lars', 'linear_steps',
+    'resnet_dropout', 'vit_dropout', 'class_balanced', 'nonlinear_classifier'
+}
+
 
 # Infinite data loader
 
@@ -255,14 +261,15 @@ def run_sweep(
 
             for trial_seed in range(n_trials):
                 done += 1
-                hp_str = ' '.join(f"{k}={v:.3g}" for k, v in hp.items())
+                hp_str = ' '.join(
+                    f"{k}={v:.3g}" for k, v in hp.items()
+                    if k not in SKIP_HPARAMS
+                )
                 print(
                     f"[{done}/{total}] {algorithm_class.__name__} "
-                    f"hp={hparams_seed} trial={trial_seed}",
+                    f"hp={hparams_seed} trial={trial_seed} | {hp_str}",
                     flush=True,
                 )
-                print(f"  hparams: {hp_str}", flush=True)
-
                 record = run_single(
                     algorithm_class = algorithm_class,
                     dataset_name    = dataset_name,
