@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 import time
-
+import numpy as np
 import torch
 from domainbed.lib.query import Q
 from domainbed.algorithms import ERM, IRM, GroupDRO, CORAL, DANN, VREx

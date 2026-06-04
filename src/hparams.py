@@ -25,8 +25,7 @@ class RandomSearch:
     def get_hparams(algorithm_name, dataset_name, n_hparams):
         configs = []
         for seed in range(n_hparams):
-            rng = np.random.RandomState(seed)
-            hp  = sample_hparams_domainbed(algorithm_name, rng, dataset_name)
+            hp  = sample_hparams_domainbed(algorithm_name, dataset_name,seed)
             configs.append({
                 'hparams_seed': seed,
                 'hparams':      dict(hp),
