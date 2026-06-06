@@ -253,6 +253,18 @@ def run_sweep(
         if i != test_env_idx
     ]
 
+    # Save dataset metadata once: labels and colors for all env out splits
+    # Same dataset object as training: guaranteed alignment with saved features
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        for i, (in_env, out_env) in enumerate(envs_splits):
+            labels = out_env['labels'].numpy()
+            images = out_env['images']
+            colors = (images[:, 1, :, :].sum(dim=(1, 2)) > 0).numpy().astype(np.int32)
+            np.save(os.path.join(save_dir, f'env{i}_labels.npy'), labels)
+            np.save(os.path.join(save_dir, f'env{i}_colors.npy'), colors)
+        print(f"  Dataset metadata saved to {save_dir}")
+
     records = []
     total   = len(algorithm_classes) * n_hparams * n_trials
     done    = 0
