@@ -159,8 +159,9 @@ def main():
 
     # Load data
     envs_splits = get_dataset(
-        args.dataset,
-        data_dir=args.data_dir,
+    args.dataset,
+    data_dir=args.data_dir,
+    test_env_idx=test_env_idx,
     )
 
     # Run sweep
