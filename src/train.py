@@ -2,37 +2,22 @@
 """
 Training loop
 
-- All data kept in memory 
+- Handles both tensor envs (ColoredMNIST) and Dataset envs (PACS)
+- All data kept in memory where possible
 - Single process
 - Evaluates only at final step
-- Saves model weights for later analysis (UMAP, probing, agreement)
-- Returns results in DomainBed's flat record format for direct
-  compatibility with their Q object and selection methods
-
-Usage:
-    from src.train import run_sweep
-    from src.hparams import RandomSearch
-
-    records = run_sweep(
-        algorithm_classes = [ERM, IRM],
-        dataset_name      = 'ColoredMNIST',
-        envs_splits       = envs_splits,   # list of (in_env, out_env) tuples
-        test_env_idx      = 2,
-        n_hparams         = 20,
-        n_trials          = 3,
-        device            = 'cuda',
-        n_steps           = 5001,
-        save_dir          = './results/colored_mnist',
-        search_method     = 'random',
-    )
+- Saves predictions, probabilities and features for later analysis
+- Returns results in DomainBed's flat record format
 """
 
 import os
 import time
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from src.hparams import HP_SEARCH_METHODS
+from src.datasets import is_tensor_env
 
 SKIP_HPARAMS = {
     'data_augmentation', 'resnet18', 'resnet50_augmix', 'dinov2',
@@ -43,26 +28,36 @@ SKIP_HPARAMS = {
 
 # Infinite data loader
 
+def make_infinite_loader(env, batch_size, device):
+    """
+    Infinite loader — handles both tensor envs and Dataset envs.
 
-def make_infinite_loader(env, batch_size,device):
+    Tensor env (ColoredMNIST): data already in memory, shuffle manually.
+    Dataset env (PACS): use DataLoader with num_workers.
     """
-    Infinite loader over an in-memory environment dict.
-    
-    env: {'images': Tensor(N, C, H, W), 'labels': Tensor(N,)}
-    
-    Keeps all data in memory.
-    Shuffles every epoch automatically.
-    """
-    x = env['images'].to(device)  
-    y = env['labels'].to(device)
-    n    = len(x)
-    while True:
-        perm = torch.randperm(n)
-        for i in range(0, n, batch_size):
-            idx = perm[i:i + batch_size]
-            if len(idx) < 2:   # following DomainBed: drop last incomplete batch
-                continue
-            yield x[idx], y[idx]
+    if is_tensor_env(env):
+        x = env['images'].to(device)
+        y = env['labels'].to(device)
+        n = len(x)
+        while True:
+            perm = torch.randperm(n)
+            for i in range(0, n, batch_size):
+                idx = perm[i:i + batch_size]
+                if len(idx) < 2:
+                    continue
+                yield x[idx], y[idx]
+    else:
+        loader = DataLoader(
+            env,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4,
+            drop_last=True,
+            pin_memory=True,
+        )
+        while True:
+            for x, y in loader:
+                yield x.to(device), y.to(device)
 
 
 # Evaluation
@@ -70,84 +65,144 @@ def make_infinite_loader(env, batch_size,device):
 @torch.no_grad()
 def evaluate(algorithm, env, device, batch_size=512):
     """
-    Evaluate classification accuracy on an in-memory environment.
-    
-    Uses batched inference to handle large environments.
-    Returns float in [0, 1].
+    Evaluate classification accuracy — handles both env types.
     """
     algorithm.eval()
-    x = env['images'].to(device)
-    y = env['labels'].to(device)
-    n = len(x)
-    correct = 0
-    for i in range(0, n, batch_size):
-        xb      = x[i:i + batch_size]
-        yb      = y[i:i + batch_size]
-        pred    = algorithm.predict(xb).argmax(1)
-        correct += (pred == yb).sum().item()
-    algorithm.train()
-    return correct / n
+
+    if is_tensor_env(env):
+        x = env['images'].to(device)
+        y = env['labels'].to(device)
+        n = len(x)
+        correct = 0
+        for i in range(0, n, batch_size):
+            xb   = x[i:i + batch_size]
+            yb   = y[i:i + batch_size]
+            pred = algorithm.predict(xb).argmax(1)
+            correct += (pred == yb).sum().item()
+        algorithm.train()
+        return correct / n
+    else:
+        loader  = DataLoader(env, batch_size=batch_size,
+                             shuffle=False, num_workers=4,
+                             pin_memory=True)
+        correct = total = 0
+        for x, y in loader:
+            x, y  = x.to(device), y.to(device)
+            pred  = algorithm.predict(x).argmax(1)
+            correct += (pred == y).sum().item()
+            total   += len(y)
+        algorithm.train()
+        return correct / total if total > 0 else 0.0
+
+
+# Save predictions, probs and features
+
+@torch.no_grad()
+def save_model_outputs(algorithm, all_envs, test_env_idx,
+                       algorithm_name, hparams_seed, trial_seed,
+                       save_dir, device, record):
+    """
+    Save predictions, probabilities and test env features for all envs.
+    Handles both tensor and Dataset envs.
+    """
+    algorithm.eval()
+    batch_size = 256
+
+    for i, (in_env, out_env) in enumerate(all_envs):
+
+        if is_tensor_env(out_env):
+            x      = out_env['images'].to(device)
+            logits = algorithm.predict(x)
+            preds  = logits.argmax(1).cpu().numpy()
+            probs  = torch.softmax(logits, dim=1).cpu().numpy()
+        else:
+            loader = DataLoader(out_env, batch_size=batch_size,
+                                shuffle=False, num_workers=4,
+                                pin_memory=True)
+            preds_list = []
+            probs_list = []
+            for x, _ in loader:
+                x      = x.to(device)
+                logits = algorithm.predict(x)
+                preds_list.append(logits.argmax(1).cpu().numpy())
+                probs_list.append(torch.softmax(logits, dim=1).cpu().numpy())
+            preds = np.concatenate(preds_list)
+            probs = np.concatenate(probs_list)
+
+        np.save(os.path.join(save_dir,
+            f"{algorithm_name}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_preds.npy"),
+            preds)
+        np.save(os.path.join(save_dir,
+            f"{algorithm_name}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_probs.npy"),
+            probs)
+        record[f'env{i}_pred_path'] = os.path.join(save_dir,
+            f"{algorithm_name}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_preds.npy")
+        record[f'env{i}_prob_path'] = os.path.join(save_dir,
+            f"{algorithm_name}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_probs.npy")
+
+    # Save features on test env out split only
+    _, test_out_env = all_envs[test_env_idx]
+
+    if is_tensor_env(test_out_env):
+        x        = test_out_env['images'].to(device)
+        features = algorithm.featurizer(x).cpu().numpy()
+    else:
+        loader = DataLoader(test_out_env, batch_size=batch_size,
+                            shuffle=False, num_workers=4,
+                            pin_memory=True)
+        features_list = []
+        for x, _ in loader:
+            features_list.append(algorithm.featurizer(x.to(device)).cpu().numpy())
+        features = np.concatenate(features_list)
+
+    fname = (f"{algorithm_name}_hpseed{hparams_seed}"
+             f"_trial{trial_seed}_testenv{test_env_idx}_features.npy")
+    np.save(os.path.join(save_dir, fname), features)
+    record['feat_path'] = os.path.join(save_dir, fname)
 
 
 # Single training run
 
 def run_single(
-    algorithm_class, # DomainBed algorithm class (ERM, IRM, ...)
-    dataset_name, # str: used for HP sampling ranges
-    train_envs, #  list of in_env dicts for training
-    all_envs, # list of (in_env, out_env) tuples for evaluation
-    test_env_idx, # int: index of held-out test environment
-    hparams_seed, # identifies which HP config this is
-    trial_seed, # int: controls weight init and batch order
-    hp, # dict: hyperparameters for this run
-    device, # str: 'cuda' or 'cpu'
-    n_steps=5001, # int: number of training steps
-    save_dir=None, # str or None: directory to save model weights
-    search_method='random', # str: logged in record for reference
+    algorithm_class,
+    dataset_name,
+    train_envs,
+    all_envs,
+    test_env_idx,
+    hparams_seed,
+    trial_seed,
+    hp,
+    device,
+    n_steps=5001,
+    save_dir=None,
+    search_method='random',
 ):
-    """
-    Train one (algorithm, hparams, seed) configuration.
-
-    Returns
-    -------
-    record : dict in DomainBed's flat format, compatible with Q object:
-        {
-            'args':         {'test_envs': [2], 'hparams_seed': 0, ...},
-            'hparams':      {'lr': 0.001, 'batch_size': 64, ...},
-            'step':         5001,
-            'algorithm':    'ERM',
-            'env0_in_acc':  0.89,
-            'env0_out_acc': 0.85,
-            'env1_in_acc':  0.87,
-            'env1_out_acc': 0.83,
-            'env2_in_acc':  0.10,
-            'env2_out_acc': 0.09,
-            'train_time':   45.2,
-            'model_path':   './results/ERM_hp0_trial0_testenv2.pt',
-            'search_method': 'random',
-        }
-    """
     # Reproducibility
     torch.manual_seed(trial_seed)
     np.random.seed(trial_seed)
 
-    # Infer problem dimensions from data
-    input_shape = tuple(train_envs[0]['images'].shape[1:])
-    n_classes   = int(max(
-        env['labels'].max().item()
-        for in_env, out_env in all_envs
-        for env in [in_env, out_env]
-    ) + 1)
+    # Infer problem dimensions
+    if is_tensor_env(train_envs[0]):
+        input_shape = tuple(train_envs[0]['images'].shape[1:])
+        n_classes   = int(max(
+            env['labels'].max().item()
+            for in_env, out_env in all_envs
+            for env in [in_env, out_env]
+        ) + 1)
+    else:
+        # PACS — get from first batch
+        sample_x, sample_y = next(iter(DataLoader(train_envs[0], batch_size=2)))
+        input_shape = tuple(sample_x.shape[1:])
+        n_classes   = 7  # PACS has 7 classes
+
     n_domains = len(train_envs)
 
-    # Instantiate DomainBed algorithm
     algorithm = algorithm_class(
         input_shape, n_classes, n_domains, hp
     ).to(device)
 
-    # Infinite loaders: data stays in memory
     loaders = [
-        make_infinite_loader(env, hp['batch_size'],device)
+        make_infinite_loader(env, hp['batch_size'], device)
         for env in train_envs
     ]
 
@@ -159,7 +214,7 @@ def run_single(
         algorithm.update(minibatches)
     train_time = time.time() - t0
 
-    # Build DomainBed-format record
+    # Build record
     record = {
         'args': {
             'test_envs':     [test_env_idx],
@@ -177,67 +232,45 @@ def run_single(
         'search_method': search_method,
     }
 
-    # Evaluate on all environments × both splits
+    # Evaluate on all environments
     for i, (in_env, out_env) in enumerate(all_envs):
         record[f'env{i}_in_acc']  = evaluate(algorithm, in_env,  device)
         record[f'env{i}_out_acc'] = evaluate(algorithm, out_env, device)
 
-    # Save model weights for later analysis
+    # Save outputs
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
         algorithm.eval()
         with torch.no_grad():
+            save_model_outputs(
+                algorithm      = algorithm,
+                all_envs       = all_envs,
+                test_env_idx   = test_env_idx,
+                algorithm_name = algorithm_class.__name__,
+                hparams_seed   = hparams_seed,
+                trial_seed     = trial_seed,
+                save_dir       = save_dir,
+                device         = device,
+                record         = record,
+            )
 
-            # Save logits/probs on ALL env out splits
-            for i, (in_env, out_env) in enumerate(all_envs):
-                x      = out_env['images'].to(device)
-                logits = algorithm.predict(x)
-                preds  = logits.argmax(1).cpu().numpy()
-                probs  = torch.softmax(logits, dim=1).cpu().numpy()
-                
-                np.save(os.path.join(save_dir,
-                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_preds.npy"), preds)
-                np.save(os.path.join(save_dir,
-                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_probs.npy"), probs)
-                
-                record[f'env{i}_pred_path'] = os.path.join(save_dir, 
-                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_preds.npy")
-                record[f'env{i}_prob_path'] = os.path.join(save_dir,
-                    f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_probs.npy")
-
-            # Save feature vectors on test env out split only
-            _, test_out_env = all_envs[test_env_idx]
-            x        = test_out_env['images'].to(device)
-            features = algorithm.featurizer(x).cpu().numpy()
-            fname    = (f"{algorithm_class.__name__}"
-                        f"_hpseed{hparams_seed}"
-                        f"_trial{trial_seed}"
-                        f"_testenv{test_env_idx}_features.npy")
-            np.save(os.path.join(save_dir, fname), features)
-            record['feat_path'] = os.path.join(save_dir, fname)
     return record
+
 
 # Full sweep
 
 def run_sweep(
-    algorithm_classes, # list of DomainBed algorithm classes
-    dataset_name, # str:  'ColoredMNIST', 'PACS'
-    envs_splits, # list of (in_env, out_env) tuples, one per environment: in_env:  80% training portion, out_env: 20% validation portion
-    test_env_idx, # int: index of held-out test environment
-    n_hparams, # int: number of HP configurations to try
-    n_trials, # int: number of seeds per HP configuration
-    device, # str: 'cuda' or 'cpu'
+    algorithm_classes,
+    dataset_name,
+    envs_splits,
+    test_env_idx,
+    n_hparams,
+    n_trials,
+    device,
     n_steps=5001,
-    save_dir=None,# str or None: directory to save model weights
-    search_method='random', 
+    save_dir=None,
+    search_method='random',
 ):
-    """
-    Run a full hyperparameter sweep.
-
-    Returns
-    -------
-    records : list of flat record dicts, ready for DomainBed's Q object
-    """
     if search_method not in HP_SEARCH_METHODS:
         raise ValueError(
             f"Unknown search method '{search_method}'. "
@@ -246,24 +279,24 @@ def run_sweep(
 
     searcher = HP_SEARCH_METHODS[search_method]
 
-    # Training envs = in_split of all non-test environments
     train_envs = [
         envs_splits[i][0]
         for i in range(len(envs_splits))
         if i != test_env_idx
     ]
 
-    # Save dataset metadata once: labels and colors for all env out splits
-    # Same dataset object as training: guaranteed alignment with saved features
+    # Save dataset metadata once — labels and colors for tensor envs only
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
-        for i, (in_env, out_env) in enumerate(envs_splits):
-            labels = out_env['labels'].numpy()
-            images = out_env['images']
-            colors = (images[:, 1, :, :].sum(dim=(1, 2)) > 0).numpy().astype(np.int32)
-            np.save(os.path.join(save_dir, f'env{i}_labels.npy'), labels)
-            np.save(os.path.join(save_dir, f'env{i}_colors.npy'), colors)
-        print(f"  Dataset metadata saved to {save_dir}")
+        _, sample_out = envs_splits[0]
+        if is_tensor_env(sample_out):
+            for i, (in_env, out_env) in enumerate(envs_splits):
+                labels = out_env['labels'].numpy()
+                images = out_env['images']
+                colors = (images[:, 1, :, :].sum(dim=(1, 2)) > 0).numpy().astype(np.int32)
+                np.save(os.path.join(save_dir, f'env{i}_labels.npy'), labels)
+                np.save(os.path.join(save_dir, f'env{i}_colors.npy'), colors)
+            print(f"  Dataset metadata saved to {save_dir}")
 
     records = []
     total   = len(algorithm_classes) * n_hparams * n_trials
@@ -271,7 +304,6 @@ def run_sweep(
 
     for algorithm_class in algorithm_classes:
 
-        # Get HP configs from chosen search method
         hp_configs = searcher.get_hparams(
             algorithm_class.__name__,
             dataset_name,
@@ -308,7 +340,6 @@ def run_sweep(
                     search_method   = search_method,
                 )
 
-                # Print progress
                 env_accs = " | ".join(
                     f"env{i} in={record[f'env{i}_in_acc']:.3f} "
                     f"out={record[f'env{i}_out_acc']:.3f}"
