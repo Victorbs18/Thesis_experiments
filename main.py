@@ -23,6 +23,7 @@ from domainbed.model_selection import (
 
 from src.datasets import get_dataset, DATASET_CONFIGS
 from src.train import run_sweep, SKIP_HPARAMS
+from src.networks import patch_domainbed_for_clip
 
 # Algorithm registry
 
@@ -67,6 +68,9 @@ def parse_args():
                     choices=['cnn', 'resnet50', 'clip'])
     return parser.parse_args()
 
+# After parse_args, before loading data:
+if args.backbone == 'clip':
+    patch_domainbed_for_clip()
 
 # Results printing
 
@@ -162,6 +166,7 @@ def main():
     args.dataset,
     data_dir=args.data_dir,
     test_env_idx=test_env_idx,
+    backbone     = args.backbone,
     )
 
     # Run sweep
@@ -179,6 +184,7 @@ def main():
         n_steps           = n_steps,
         save_dir          = save_dir,
         search_method     = args.search_method,
+        backbone          = args.backbone,
     )
 
     print(f"\nSweep completed in {(time.time()-t0)/60:.1f} min")

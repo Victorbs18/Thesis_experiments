@@ -270,6 +270,7 @@ def run_sweep(
     n_steps=5001,
     save_dir=None,
     search_method='random',
+    backbone='resnet50',
 ):
     if search_method not in HP_SEARCH_METHODS:
         raise ValueError(
@@ -308,6 +309,7 @@ def run_sweep(
             algorithm_class.__name__,
             dataset_name,
             n_hparams,
+            backbone = backbone,
         )
 
         for hp_config in hp_configs:

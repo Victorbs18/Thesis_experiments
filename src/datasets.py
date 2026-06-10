@@ -17,13 +17,15 @@ Usage:
     from src.datasets import get_dataset
     envs_splits = get_dataset('ColoredMNIST', data_dir='./data')
     envs_splits = get_dataset('PACS', data_dir='./data', test_env_idx=0)
+    envs_splits = get_dataset('PACS', data_dir='./data', test_env_idx=0, backbone='clip')
 """
 
 import os
 import sys
 import numpy as np
 import torch
-from torchvision.datasets import MNIST
+from torchvision import transforms
+from torchvision.datasets import MNIST, ImageFolder
 from torch.utils.data import Subset
 
 
@@ -75,6 +77,50 @@ def split_env_subset(dataset, holdout_frac=0.2, seed=0):
     return Subset(dataset, train_idx), Subset(dataset, val_idx)
 
 
+# Transforms
+
+def get_pacs_transforms(backbone='resnet50'):
+    """
+    Return (aug_transform, eval_transform) for PACS.
+    backbone='resnet50' → ImageNet normalization
+    backbone='clip'     → CLIP normalization + BICUBIC interpolation
+    """
+    if backbone == 'clip':
+        normalize     = transforms.Normalize(
+            mean=(0.48145466, 0.4578275,  0.40821073),
+            std= (0.26862954, 0.26130258, 0.27577711),
+        )
+        interpolation = transforms.InterpolationMode.BICUBIC
+        eval_resize   = transforms.Compose([
+            transforms.Resize(224, interpolation=interpolation),
+            transforms.CenterCrop(224),
+        ])
+    else:
+        normalize     = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std= [0.229, 0.224, 0.225],
+        )
+        interpolation = transforms.InterpolationMode.BILINEAR
+        eval_resize   = transforms.Resize((224, 224))
+
+    aug_transform = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.7, 1.0),
+                                     interpolation=interpolation),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+        transforms.RandomGrayscale(p=0.1),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    eval_transform = transforms.Compose([
+        eval_resize,
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    return aug_transform, eval_transform
+
+
 # ColoredMNIST
 
 def _bernoulli(p, size):
@@ -97,11 +143,13 @@ def _color_dataset(images, labels, environment):
     return {'images': x, 'labels': y}
 
 
-def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0):
+def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
+                      backbone='cnn'):
     """
     Build ColoredMNIST exactly as DomainBed does.
     3 environments: e=0.1 (+90%), e=0.2 (+80%), e=0.9 (-90%)
     Returns list of (in_env, out_env) tuples.
+    backbone argument accepted but ignored (always uses CNN).
     """
     mnist_train = MNIST(data_dir, train=True,  download=True)
     mnist_test  = MNIST(data_dir, train=False, download=True)
@@ -134,24 +182,30 @@ def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0):
 # PACS
 
 def get_pacs(data_dir='./data', test_env_idx=0,
-             holdout_frac=0.2, seed=0):
-    sys.path.insert(0, 'DomainBed')
-    from domainbed.datasets import MultipleEnvironmentImageFolder
-
-    hparams = {'data_augmentation': True}
-
-    # Use MultipleEnvironmentImageFolder directly with the actual data path
-    dataset = MultipleEnvironmentImageFolder(
-        data_dir, [test_env_idx], hparams['data_augmentation'], hparams)
+             holdout_frac=0.2, seed=0, backbone='resnet50'):
+    """
+    Load PACS dataset.
+    4 environments: art_painting, cartoon, photo, sketch
+    backbone controls preprocessing transforms:
+        'resnet50' → ImageNet normalization (DomainBed standard)
+        'clip'     → CLIP normalization + BICUBIC interpolation
+    Returns list of (in_env, out_env) tuples.
+    """
+    aug_transform, eval_transform = get_pacs_transforms(backbone)
 
     env_names = sorted([f.name for f in os.scandir(data_dir) if f.is_dir()])
-    print(f"PACS loaded (test env: {env_names[test_env_idx]}):")
+    print(f"PACS loaded (backbone={backbone}, "
+          f"test env: {env_names[test_env_idx]}):")
 
     envs_splits = []
-    for i, env_dataset in enumerate(dataset.datasets):
-        marker = ' : test' if i == test_env_idx else ''
-        print(f"  env{i} ({env_names[i]}): {len(env_dataset)} images{marker}")
-        in_env, out_env = split_env_subset(env_dataset, holdout_frac, seed)
+    for i, name in enumerate(env_names):
+        marker    = ' : test' if i == test_env_idx else ''
+        env_path  = os.path.join(data_dir, name)
+        # test env uses eval transform, training envs use augmentation
+        transform = eval_transform if i == test_env_idx else aug_transform
+        dataset   = ImageFolder(env_path, transform=transform)
+        print(f"  env{i} ({name}): {len(dataset)} images{marker}")
+        in_env, out_env = split_env_subset(dataset, holdout_frac, seed)
         envs_splits.append((in_env, out_env))
 
     return envs_splits
@@ -187,13 +241,15 @@ DATASET_CONFIGS = {
 
 
 def get_dataset(dataset_name, data_dir, test_env_idx=None,
-                holdout_frac=0.2, seed=0):
+                holdout_frac=0.2, seed=0, backbone='resnet50'):
     """
     Single entry point for all datasets.
 
     Usage:
         envs_splits = get_dataset('ColoredMNIST', data_dir='./data')
         envs_splits = get_dataset('PACS', data_dir='./data', test_env_idx=0)
+        envs_splits = get_dataset('PACS', data_dir='./data',
+                                  test_env_idx=0, backbone='clip')
     """
     if dataset_name not in DATASET_CONFIGS:
         raise ValueError(
@@ -206,6 +262,7 @@ def get_dataset(dataset_name, data_dir, test_env_idx=None,
         test_env_idx = cfg['test_env_idx']
 
     if dataset_name == 'ColoredMNIST':
-        return cfg['loader'](data_dir, holdout_frac, seed)
+        return cfg['loader'](data_dir, holdout_frac, seed, backbone)
     else:
-        return cfg['loader'](data_dir, test_env_idx, holdout_frac, seed)
+        return cfg['loader'](data_dir, test_env_idx, holdout_frac, seed,
+                             backbone)
