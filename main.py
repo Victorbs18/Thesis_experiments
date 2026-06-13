@@ -68,10 +68,6 @@ def parse_args():
                     choices=['cnn', 'resnet50', 'clip'])
     return parser.parse_args()
 
-# After parse_args, before loading data:
-if args.backbone == 'clip':
-    patch_domainbed_for_clip()
-
 # Results printing
 
 def print_results(all_results, dataset_cfg, algo_names, dataset_name):
@@ -116,6 +112,9 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
 
 def main():
     args   = parse_args()
+    # After parse_args, before loading data:
+    if args.backbone == 'clip':
+        patch_domainbed_for_clip()
     device = args.device if torch.cuda.is_available() else 'cpu'
 
     # Dataset config
