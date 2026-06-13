@@ -68,6 +68,8 @@ def parse_args():
                     choices=['cnn', 'resnet50', 'clip'])
     return parser.parse_args()
 
+
+
 # Results printing
 
 def print_results(all_results, dataset_cfg, algo_names, dataset_name):
@@ -187,9 +189,14 @@ def main():
     )
 
     print(f"\nSweep completed in {(time.time()-t0)/60:.1f} min")
-
-    # Save raw records
     records_path = os.path.join(output_dir, 'records.json')
+    # Save raw records
+    if os.path.exists(records_path):
+        with open(records_path) as f:
+            existing_records = json.load(f)
+        # remove any old records for the algorithms we just ran (avoid duplicates)
+        existing_records = [r for r in existing_records if r['algorithm'] not in algo_names]
+        records = existing_records + records
     with open(records_path, 'w') as f:
         json.dump(records, f, indent=2)
     print(f"Records saved to {records_path}")
@@ -241,6 +248,11 @@ def main():
 
     # Save final results
     results_path = os.path.join(output_dir, 'results.json')
+    if os.path.exists(results_path):
+        with open(results_path) as f:
+            existing_results = json.load(f)
+        existing_results.update(all_results)
+        all_results = existing_results
     with open(results_path, 'w') as f:
         json.dump(all_results, f, indent=2)
     print(f"\nFinal results saved to {results_path}")

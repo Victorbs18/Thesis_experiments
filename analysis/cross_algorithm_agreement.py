@@ -6,14 +6,14 @@ Pipeline:
     Step 1: Compute ERM-ERM agreement line — reference line (label-free)
             slope, intercept, R, ood_median computed in probit space.
 
-    Step 2: Identify candidate IRM escapes:
+    Step 2: Identify candidate algo_b escapes (relative to algo_a):
             rel_dH > escape_dh_min AND OOD_agr < erm_ood_median
 
-    Step 3: Validate candidates via IRM-IRM agreement:
-            Genuine escape:  IRM candidates agree WITH EACH OTHER OOD
-                             (IRM-IRM OOD agr > erm_ood_median)
-            Degenerate:      IRM candidates disagree WITH EACH OTHER OOD
-                             (IRM-IRM OOD agr < erm_ood_median)
+    Step 3: Validate candidates via algo_b-algo_b agreement:
+            Genuine escape:  algo_b candidates agree WITH EACH OTHER OOD
+                             (algo_b-algo_b OOD agr > erm_ood_median)
+            Degenerate:      algo_b candidates disagree WITH EACH OTHER OOD
+                             (algo_b-algo_b OOD agr < erm_ood_median)
 
     Step 4: escape_rate = genuine / n_hparams
             escape_rate > 0 → well-specified ✓
@@ -27,6 +27,8 @@ Usage:
         --n_envs       3 \
         --n_hparams    20 \
         --n_trials     3 \
+        --algo_a       ERM \
+        --algo_b       CORAL \
         --dataset_name ColoredMNIST \
         --test_env_name "-90% (env2)"
 """
@@ -78,7 +80,7 @@ def get_record_info(records, algo, seed, test_env_idx):
     return {
         'ood_acc': float(ood_acc),
         'lr':      hp.get('lr', 0),
-        'lambda':  hp.get('irm_lambda', None),
+        'lambda':  hp.get('irm_lambda', hp.get('mmd_gamma', None)),
         'anneal':  hp.get('irm_penalty_anneal_iters', None),
         'bs':      hp.get('batch_size', None),
     }
@@ -168,12 +170,12 @@ def compute_erm_line(preds_dir, n_hparams, n_trials, test_env_idx, n_envs):
     }
 
 
-# IRM-IRM agreement among candidate seeds
+# algo_b-algo_b agreement among candidate seeds
 
-def compute_irm_irm_agreement(preds_dir, candidate_seeds,
-                               n_trials, test_env_idx):
+def compute_candidate_agreement(preds_dir, candidate_seeds, algo_b,
+                                 n_trials, test_env_idx):
     """
-    Compute mean OOD agreement between all pairs of candidate IRM seeds.
+    Compute mean OOD agreement between all pairs of candidate algo_b seeds.
     High agreement → candidates converged to same solution → genuine escape
     Low agreement  → candidates collapsed to different solutions → degenerate
     """
@@ -182,7 +184,7 @@ def compute_irm_irm_agreement(preds_dir, candidate_seeds,
 
     agr_vals = []
     for seed_i, seed_j in combinations(candidate_seeds, 2):
-        ood_agr = get_ood_agr(preds_dir, 'IRM', 'IRM', seed_i, seed_j,
+        ood_agr = get_ood_agr(preds_dir, algo_b, algo_b, seed_i, seed_j,
                                n_trials, test_env_idx)
         if ood_agr is not None:
             agr_vals.append(ood_agr)
@@ -201,7 +203,7 @@ def compute_cross_algorithm_agreement(
     n_trials=3,
     algo_a='ERM',
     algo_b='IRM',
-    escape_dh_min=0.1,   # rel_dH > this → IRM more uncertain than ERM
+    escape_dh_min=0.1,   # rel_dH > this → algo_b more uncertain than algo_a
 ):
     with open(records_path) as f:
         records = json.load(f)
@@ -234,16 +236,16 @@ def compute_cross_algorithm_agreement(
           f"ood_median={erm_ood_median:.3f}  "
           f"n_pairs={erm_line['n_pairs']}")
 
-    # Step 2: ERM-IRM pairs — identify candidates
-    print(f"\n  Computing ERM-IRM pairs...")
+    # Step 2: algo_a-algo_b pairs — identify candidates
+    print(f"\n  Computing {algo_a}-{algo_b} pairs...")
     print(f"\n  {'seed':>4} | "
           f"{'ID_agr':>6} | {'OOD_agr':>7} | "
           f"{'pred_OOD':>8} | {'|dev|':>6} | "
           f"{'rel_h_b':>7} | {'dH/max':>7} | "
-          f"{'acc_ERM':>8} | {'acc_IRM':>8} | "
-          f"{'H(ERM)':>7} | {'H(IRM)':>7} | "
-          f"{'lambda':>10} | {'anneal':>6} | step2_status")
-    print(f"  {'-'*135}")
+          f"{'acc_'+algo_a:>8} | {'acc_'+algo_b:>8} | "
+          f"{'H('+algo_a+')':>7} | {'H('+algo_b+')':>7} | "
+          f"{'lambda/gamma':>12} | {'anneal':>6} | step2_status")
+    print(f"  {'-'*137}")
 
     id_agrs     = []
     ood_agrs    = []
@@ -316,7 +318,7 @@ def compute_cross_algorithm_agreement(
         seeds_used.append(seed)
         step2_statuses.append(step2)
 
-        lambda_str = f"{lambda_b:10.1f}" if lambda_b else f"{'—':>10}"
+        lambda_str = f"{lambda_b:12.1f}" if lambda_b else f"{'—':>12}"
         anneal_str = f"{anneal_b:6d}"    if anneal_b else f"{'—':>6}"
         acc_a_str  = f"{acc_a:8.3f}"     if acc_a is not None else f"{'—':>8}"
         acc_b_str  = f"{acc_b:8.3f}"     if acc_b is not None else f"{'—':>8}"
@@ -333,7 +335,7 @@ def compute_cross_algorithm_agreement(
               f"{ha_str} | {hb_str} | "
               f"{lambda_str} | {anneal_str} | {step2}")
 
-    # Step 3: IRM-IRM agreement among candidates
+    # Step 3: algo_b-algo_b agreement among candidates
     candidate_seeds = [seeds_used[i] for i, s in enumerate(step2_statuses)
                        if s == 'candidate']
     on_line_seeds   = [seeds_used[i] for i, s in enumerate(step2_statuses)
@@ -342,21 +344,25 @@ def compute_cross_algorithm_agreement(
     print(f"\n  Candidates: {candidate_seeds}")
     print(f"  On line:    {on_line_seeds}")
 
-    irm_irm_candidates = compute_irm_irm_agreement(
-        preds_dir, candidate_seeds, n_trials, test_env_idx)
-    irm_irm_online = compute_irm_irm_agreement(
-        preds_dir, on_line_seeds, n_trials, test_env_idx)
+    candidate_agreement = compute_candidate_agreement(
+        preds_dir, candidate_seeds, algo_b, n_trials, test_env_idx)
+    online_agreement = compute_candidate_agreement(
+        preds_dir, on_line_seeds, algo_b, n_trials, test_env_idx)
 
-    print(f"\n  Step 3 — IRM-IRM agreement among candidates:")
-    print(f"  IRM-IRM OOD agr (candidates): "
-          f"{irm_irm_candidates:.3f}" if irm_irm_candidates else "  N/A")
-    print(f"  IRM-IRM OOD agr (on line):    "
-          f"{irm_irm_online:.3f}" if irm_irm_online else "  N/A")
+    print(f"\n  Step 3 — {algo_b}-{algo_b} agreement among candidates:")
+    if candidate_agreement is not None:
+        print(f"  {algo_b}-{algo_b} OOD agr (candidates): {candidate_agreement:.3f}")
+    else:
+        print(f"  {algo_b}-{algo_b} OOD agr (candidates): N/A")
+    if online_agreement is not None:
+        print(f"  {algo_b}-{algo_b} OOD agr (on line):    {online_agreement:.3f}")
+    else:
+        print(f"  {algo_b}-{algo_b} OOD agr (on line):    N/A")
     print(f"  ERM-ERM OOD median (reference): {erm_ood_median:.3f}")
 
     # Verdict
-    if irm_irm_candidates is not None:
-        genuine_escape = irm_irm_candidates > erm_ood_median * 0.5
+    if candidate_agreement is not None:
+        genuine_escape = candidate_agreement > erm_ood_median * 0.5
     else:
         genuine_escape = False
 
@@ -365,29 +371,29 @@ def compute_cross_algorithm_agreement(
     escape_rate  = n_candidates / n_hparams if genuine_escape else 0.0
 
     results = {
-        'erm_line':             erm_line,
-        'id_agrs':              id_agrs,
-        'ood_agrs':             ood_agrs,
-        'deviations':           deviations,
-        'rel_dhs':              rel_dhs,
-        'rel_h_bs':             rel_h_bs,
-        'entropies_a':          entropies_a,
-        'entropies_b':          entropies_b,
-        'seeds_used':           seeds_used,
-        'step2_statuses':       step2_statuses,
-        'candidate_seeds':      candidate_seeds,
-        'on_line_seeds':        on_line_seeds,
-        'irm_irm_candidates':   irm_irm_candidates,
-        'irm_irm_online':       irm_irm_online,
-        'genuine_escape':       genuine_escape,
-        'n_candidates':         n_candidates,
-        'n_on_line':            n_on_line,
-        'escape_rate':          escape_rate,
-        'n_pairs':              len(id_agrs),
-        'algo_a':               algo_a,
-        'algo_b':               algo_b,
-        'max_entropy':          max_entropy,
-        'n_classes':            n_classes,
+        'erm_line':              erm_line,
+        'id_agrs':               id_agrs,
+        'ood_agrs':              ood_agrs,
+        'deviations':            deviations,
+        'rel_dhs':               rel_dhs,
+        'rel_h_bs':              rel_h_bs,
+        'entropies_a':           entropies_a,
+        'entropies_b':           entropies_b,
+        'seeds_used':            seeds_used,
+        'step2_statuses':        step2_statuses,
+        'candidate_seeds':       candidate_seeds,
+        'on_line_seeds':         on_line_seeds,
+        'candidate_agreement':   candidate_agreement,
+        'online_agreement':      online_agreement,
+        'genuine_escape':        genuine_escape,
+        'n_candidates':          n_candidates,
+        'n_on_line':             n_on_line,
+        'escape_rate':           escape_rate,
+        'n_pairs':               len(id_agrs),
+        'algo_a':                algo_a,
+        'algo_b':                algo_b,
+        'max_entropy':           max_entropy,
+        'n_classes':             n_classes,
     }
 
     return results
@@ -405,14 +411,19 @@ def print_table(results, dataset_name, test_env_name):
         return
 
     erm    = results['erm_line']
-    irm_c  = results['irm_irm_candidates']
-    irm_ol = results['irm_irm_online']
+    algo_b = results['algo_b']
+    cand   = results['candidate_agreement']
+    onl    = results['online_agreement']
 
-    print(f"  ERM-ERM OOD median:           {erm['ood_median']:.3f}")
-    print(f"  IRM-IRM OOD agr (candidates): "
-          f"{irm_c:.3f}" if irm_c is not None else "  N/A")
-    print(f"  IRM-IRM OOD agr (on line):    "
-          f"{irm_ol:.3f}" if irm_ol is not None else "  N/A")
+    print(f"  ERM-ERM OOD median:                  {erm['ood_median']:.3f}")
+    if cand is not None:
+        print(f"  {algo_b}-{algo_b} OOD agr (candidates): {cand:.3f}")
+    else:
+        print(f"  {algo_b}-{algo_b} OOD agr (candidates): N/A")
+    if onl is not None:
+        print(f"  {algo_b}-{algo_b} OOD agr (on line):    {onl:.3f}")
+    else:
+        print(f"  {algo_b}-{algo_b} OOD agr (on line):    N/A")
 
     print(f"\n  Candidates (step 2): {results['n_candidates']}")
     print(f"  On line (step 2):    {results['n_on_line']}")
