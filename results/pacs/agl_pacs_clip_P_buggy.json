@@ -1,0 +1,78 @@
+{
+  "experiment": "AGL Framework — PACS CLIP ViT-B/32 — Test env P (Photo)",
+  "settings": {
+    "backbone": "CLIP ViT-B/32 (last block + head finetuned)",
+    "n_coarse_trials": 5,
+    "n_seeds": 1,
+    "fine_trials": 5,
+    "n_steps": 2001,
+    "test_env": "P (Photo)",
+    "train_envs": ["A", "C", "S"],
+    "note": "Bug present in this run — collapsed IRM configs incorrectly triggered DIVERGE. Fixed in next version."
+  },
+  "P": {
+    "detection": {
+      "labeled": "AGREE_IRM_FAILS",
+      "label_free": "DIVERGE",
+      "note": "label_free DIVERGE was a false positive caused by collapsed IRM configs. Fixed in subsequent runs."
+    },
+    "agl": {"slope": -0.090, "intercept": 1.082, "r2": 0.018},
+    "acl": {"slope": -0.565, "intercept": 1.549, "r2": 0.087},
+    "entropy": {"id": 0.076, "ood": 0.097, "delta": 0.021, "erm_struggling": true},
+    "divergence": {
+      "n_div_lf": 2,
+      "frac_div_lf": 0.40,
+      "n_div_lb": 0,
+      "note": "Both diverging configs were collapsed (val~0.22) — not genuine divergence"
+    },
+    "coarse_trials": [
+      {"trial": 0, "erm_val": 0.978, "erm_ood": 0.994, "irm_val": 0.973, "irm_ood": 0.994, "irm_lambda": 5},
+      {"trial": 1, "erm_val": 0.973, "erm_ood": 1.000, "irm_val": 0.531, "irm_ood": 0.455, "irm_lambda": 2527},
+      {"trial": 2, "erm_val": 0.980, "erm_ood": 1.000, "irm_val": 0.946, "irm_ood": 0.994, "irm_lambda": 6},
+      {"trial": 3, "erm_val": 0.976, "erm_ood": 1.000, "irm_val": 0.944, "irm_ood": 0.994, "irm_lambda": 80},
+      {"trial": 4, "erm_val": 0.978, "erm_ood": 0.988, "irm_val": 0.218, "irm_ood": 0.204, "irm_lambda": 1847}
+    ],
+    "fine_search": {
+      "label_free": {
+        "decision": "DIVERGE (incorrect)",
+        "trials": [
+          {"fine": 0, "val": 0.973, "ood": 1.000, "score": -0.004, "lambda": 4339},
+          {"fine": 1, "val": 0.220, "ood": 0.287, "score": 0.789, "lambda": 2106},
+          {"fine": 2, "val": 0.284, "ood": 0.287, "score": 0.800, "lambda": 8785},
+          {"fine": 3, "val": 0.279, "ood": 0.251, "score": 0.842, "lambda": 1641},
+          {"fine": 4, "val": 0.978, "ood": 0.988, "score": 0.000, "lambda": 954}
+        ],
+        "selected": {"val": 0.279, "ood": 0.251, "note": "collapsed model selected — bug"}
+      },
+      "labeled": {
+        "decision": "AGREE_IRM_FAILS → ERM search",
+        "trials": [
+          {"fine": 0, "val": 0.973, "ood": 0.994, "score": 0.994},
+          {"fine": 1, "val": 0.976, "ood": 1.000, "score": 1.000},
+          {"fine": 2, "val": 0.976, "ood": 0.994, "score": 0.994},
+          {"fine": 3, "val": 0.978, "ood": 0.994, "score": 0.994},
+          {"fine": 4, "val": 0.976, "ood": 0.988, "score": 0.988}
+        ],
+        "selected": {"val": 0.976, "ood": 1.000}
+      }
+    },
+    "tta": {
+      "label_free": {"pre_test": 0.228, "post_test": 0.228, "kept": false},
+      "labeled": {"pre_test": 0.995, "post_test": 0.995, "kept": false}
+    },
+    "results": {
+      "domainbed_erm":  0.972,
+      "domainbed_irm":  0.967,
+      "clip_erm_base":  1.000,
+      "clip_irm_base":  0.994,
+      "coarse_erm":     1.000,
+      "coarse_irm":     0.994,
+      "labeled_pre":    0.995,
+      "labeled_post":   0.995,
+      "lf_pre":         0.228,
+      "lf_post":        0.228,
+      "note": "lf results invalid due to collapsed config bug. Will be rerun with fix."
+    },
+    "time_min": 171.2
+  }
+}

@@ -17,7 +17,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.hparams import HP_SEARCH_METHODS
-from src.datasets import is_tensor_env
+from src.datasets import is_tensor_env, DATASET_CONFIGS
 
 SKIP_HPARAMS = {
     'data_augmentation', 'resnet18', 'resnet50_augmix', 'dinov2',
@@ -173,6 +173,7 @@ def run_single(
     trial_seed,
     hp,
     device,
+    n_classes,
     n_steps=5001,
     save_dir=None,
     search_method='random',
@@ -181,19 +182,12 @@ def run_single(
     torch.manual_seed(trial_seed)
     np.random.seed(trial_seed)
 
-    # Infer problem dimensions
+    # Infer input shape
     if is_tensor_env(train_envs[0]):
         input_shape = tuple(train_envs[0]['images'].shape[1:])
-        n_classes   = int(max(
-            env['labels'].max().item()
-            for in_env, out_env in all_envs
-            for env in [in_env, out_env]
-        ) + 1)
     else:
-        # PACS — get from first batch
-        sample_x, sample_y = next(iter(DataLoader(train_envs[0], batch_size=2)))
-        input_shape = tuple(sample_x.shape[1:])
-        n_classes   = 7  # PACS has 7 classes
+        sample_x, _ = next(iter(DataLoader(train_envs[0], batch_size=2)))
+        input_shape  = tuple(sample_x.shape[1:])
 
     n_domains = len(train_envs)
 
@@ -278,7 +272,8 @@ def run_sweep(
             f"Available: {list(HP_SEARCH_METHODS.keys())}"
         )
 
-    searcher = HP_SEARCH_METHODS[search_method]
+    searcher  = HP_SEARCH_METHODS[search_method]
+    n_classes = DATASET_CONFIGS[dataset_name]['n_classes']
 
     train_envs = [
         envs_splits[i][0]
@@ -337,6 +332,7 @@ def run_sweep(
                     trial_seed      = trial_seed,
                     hp              = hp,
                     device          = device,
+                    n_classes       = n_classes,
                     n_steps         = n_steps,
                     save_dir        = save_dir,
                     search_method   = search_method,

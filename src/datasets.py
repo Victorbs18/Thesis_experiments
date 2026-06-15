@@ -27,6 +27,10 @@ import torch
 from torchvision import transforms
 from torchvision.datasets import MNIST, ImageFolder
 from torch.utils.data import Subset
+from domainbed.datasets import (
+    WILDSCamelyon as DB_WILDSCamelyon,
+    RotatedMNIST  as DB_RotatedMNIST,
+)
 
 
 # Shared utilities
@@ -79,7 +83,7 @@ def split_env_subset(dataset, holdout_frac=0.2, seed=0):
 
 # Transforms
 
-def get_pacs_transforms(backbone='resnet50'):
+def get_image_transforms(backbone='resnet50'):
     """
     Return (aug_transform, eval_transform) for PACS.
     backbone='resnet50' → ImageNet normalization
@@ -119,6 +123,30 @@ def get_pacs_transforms(backbone='resnet50'):
     ])
 
     return aug_transform, eval_transform
+
+
+# RotatedMNIST
+
+def get_rotated_mnist(data_dir='./data', test_env_idx=5,
+                      holdout_frac=0.2, seed=0, backbone='cnn'):
+    """
+    Load RotatedMNIST via DomainBed's implementation.
+    6 environments: rotations 0°, 15°, 30°, 45°, 60°, 75°.
+    backbone argument accepted but ignored (always uses CNN).
+    Returns list of (in_env, out_env) tuples.
+    """
+    db_dataset = DB_RotatedMNIST(data_dir, test_envs=[test_env_idx], hparams={})
+    env_names  = DB_RotatedMNIST.ENVIRONMENTS  # ['0', '15', '30', '45', '60', '75']
+
+    print(f"RotatedMNIST loaded (test env: {env_names[test_env_idx]}°):")
+    envs_splits = []
+    for i, env in enumerate(db_dataset.datasets):
+        marker = ' : test' if i == test_env_idx else ''
+        print(f"  env{i} ({env_names[i]}°): {len(env)} samples{marker}")
+        in_env, out_env = split_env_subset(env, holdout_frac, seed)
+        envs_splits.append((in_env, out_env))
+
+    return envs_splits
 
 
 # ColoredMNIST
@@ -191,7 +219,7 @@ def get_pacs(data_dir='./data', test_env_idx=0,
         'clip'     → CLIP normalization + BICUBIC interpolation
     Returns list of (in_env, out_env) tuples.
     """
-    aug_transform, eval_transform = get_pacs_transforms(backbone)
+    aug_transform, eval_transform = get_image_transforms(backbone)
 
     env_names = sorted([f.name for f in os.scandir(data_dir) if f.is_dir()])
     print(f"PACS loaded (backbone={backbone}, "
@@ -211,9 +239,51 @@ def get_pacs(data_dir='./data', test_env_idx=0,
     return envs_splits
 
 
+# WILDSCamelyon
+
+def get_wildscamelyon(data_dir='./data', test_env_idx=2,
+                       holdout_frac=0.2, seed=0, backbone='resnet50'):
+    """
+    Load WILDSCamelyon via DomainBed's wrapper (requires `wilds` package and
+    Camelyon17 data downloaded under data_dir).
+    5 environments: hospital_0..hospital_4 (test_env_idx=2 by default).
+    backbone controls transforms via get_image_transforms (same as PACS).
+    Returns list of (in_env, out_env) tuples.
+    """
+    hparams = {'data_augmentation': True}
+    db_dataset = DB_WILDSCamelyon(data_dir, test_envs=[test_env_idx], hparams=hparams)
+
+    aug_transform, eval_transform = get_image_transforms(backbone)
+
+    print(f"WILDSCamelyon loaded (backbone={backbone}, "
+          f"test env: {db_dataset.ENVIRONMENTS[test_env_idx]}):")
+    envs_splits = []
+    for i, env in enumerate(db_dataset.datasets):
+        # Override DomainBed's fixed ImageNet transforms with backbone-aware ones
+        env.transform = eval_transform if i == test_env_idx else aug_transform
+        marker = ' : test' if i == test_env_idx else ''
+        print(f"  env{i} ({db_dataset.ENVIRONMENTS[i]}): {len(env)} samples{marker}")
+        in_env, out_env = split_env_subset(env, holdout_frac, seed)
+        envs_splits.append((in_env, out_env))
+
+    return envs_splits
+
+
 # Dataset registry
 
 DATASET_CONFIGS = {
+    'RotatedMNIST': {
+        'loader':            get_rotated_mnist,
+        'n_envs':            6,
+        'test_env_idx':      5,
+        'n_steps':           5001,
+        'env_names':         ['0°', '15°', '30°', '45°', '60°', '75°'],
+        'input_shape':       (1, 28, 28),
+        'n_classes':         10,
+        'selection_methods': ['IIDAccuracySelectionMethod',
+                              'LeaveOneOutSelectionMethod',
+                              'OracleSelectionMethod'],
+    },
     'ColoredMNIST': {
         'loader':            get_colored_mnist,
         'n_envs':            3,
@@ -235,6 +305,17 @@ DATASET_CONFIGS = {
         'n_classes':         7,
         'selection_methods': ['IIDAccuracySelectionMethod',
                               'LeaveOneOutSelectionMethod',
+                              'OracleSelectionMethod'],
+    },
+    'WILDSCamelyon': {
+        'loader':            get_wildscamelyon,
+        'n_envs':            5,
+        'test_env_idx':      2,
+        'n_steps':           5001,
+        'env_names':         ['H0', 'H1', 'H2', 'H3', 'H4'],
+        'input_shape':       (3, 224, 224),
+        'n_classes':         2,
+        'selection_methods': ['IIDAccuracySelectionMethod',
                               'OracleSelectionMethod'],
     },
 }
