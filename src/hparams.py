@@ -17,6 +17,9 @@ class RandomSearch:
             hp = sample_hparams_domainbed(algorithm_name, dataset_name, seed)
             if backbone == 'clip':
                 hp['use_clip'] = True
+                # Fine-tuning range: only last CLIP block + head are unfrozen
+                rng = np.random.RandomState(seed)
+                hp['lr'] =  float(10 ** rng.uniform(-6, -4.5))
             configs.append({
                 'hparams_seed': seed,
                 'hparams':      dict(hp),

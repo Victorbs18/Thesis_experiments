@@ -1,40 +1,51 @@
 # analysis/cross_algorithm_agreement.py
 """
-Cross-algorithm agreement diagnostic.
+Cross-algorithm agreement diagnostic + label-free model selection.
 
-Pipeline:
-    Step 0: Entropy filter — restrict to seeds where both algo_a and algo_b
-            produce non-degenerate predictions (normalized entropy < threshold).
+Observational columns in the per-seed Step-2 table (no decision logic changed):
 
-    Step 1: Compute ERM-ERM reference line AND algo_a-algo_b cross-pair line,
-            both in probit space.
-            High R on the cross-pair line (analogous to Salaudeen ACL R >= 0.3)
-            suggests ID agreement predicts OOD agreement consistently across
-            algorithms -> better-ID tends to be better-OOD -> MISSPECIFIED.
-            Low R -> no such transfer -> well-specified (DG may be needed).
+  mmd_cross   : MMD between ERM(OOD) and DG(OOD) softmax distributions.
+  mmd_shift   : MMD between DG(ID pooled) and DG(OOD) softmax distributions.
+  wass_cross  : Sinkhorn-Wasserstein between ERM(OOD) and DG(OOD).
+  wass_shift  : Sinkhorn-Wasserstein between DG(ID pooled) and DG(OOD).
+  pad_cross   : Proxy A-Distance between ERM(OOD) and DG(OOD).
+  pad_shift   : Proxy A-Distance between DG(ID pooled) and DG(OOD).
 
-    Step 2: Identify candidate algo_b escapes (same-seed pairs):
-            OOD_agr < erm_ood_median  ->  'candidate'
-            else                      ->  'on line'
+  _cross variants measure prediction divergence from ERM at test time.
+  _shift variants measure prediction stability under the distribution shift.
 
-    Step 3: Validate candidates via algo_b-algo_b agreement:
-            disagreement_rate = candidate_agreement / erm_ood_median
-            High -> candidates converge to a shared alternative -> DG useful.
-            Low  -> candidates scatter (degenerate) -> DG not useful here.
+  All distance metrics are OFF by default (--compute_distances to enable).
+
+Diagnostic pipeline:
+    Step 0: Entropy filter — symmetric: exclude seeds where either algo_a
+            or algo_b has rel_H >= entropy_threshold.
+    Step 1: ERM-ERM reference line (built from valid_a alone, fixed across
+            all algo_b comparisons) + algo_a-algo_b cross-pair line.
+    Step 2: candidate / on-line classification per same-seed pair
+            (ood_agr < erm_ood_median -> candidate, else on line).
+    Step 3: algo_b-algo_b agreement among candidates.
+
+Label-free model selection:
+    Stage 1: pick algorithm based on cross_line_R + mean candidate entropy.
+    Stage 2: pick seed based on individual rel_h, with the pool depending
+             on benchmark type:
+               - misspecified (cross_line_R >= threshold): pick from ON-LINE
+                 seeds (DG agrees with ERM -> ERM shortcut transfers -> stay
+                 close to ERM's solution).
+               - well-specified (cross_line_R < threshold): pick from CANDIDATE
+                 seeds (DG diverges from ERM -> possibly found invariant feature
+                 -> pick most confident divergent seed).
 
 Usage:
     python analysis/cross_algorithm_agreement.py \
         --preds_dir    results/coloredmnist/test_env2/cnn/random/models \
         --records_path results/coloredmnist/test_env2/cnn/random/records.json \
-        --test_env_idx 2 \
-        --n_envs       3 \
-        --n_hparams    20 \
-        --n_trials     3 \
-        --algo_a       ERM \
-        --algo_b       IRM \
-        --dataset_name ColoredMNIST \
-        --test_env_name "-90% (env2)" \
-        --plot_path    cmnist_plot.png
+        --test_env_idx 2 --n_envs 3 --algo_a ERM \
+        --algo_b IRM VREx GroupDRO CORAL DANN \
+        --dataset_name ColoredMNIST --test_env_name "-90% (env2)" \
+        --multi_plot_path cmnist_multi.png \
+        --select --evaluate_selection \
+        --compute_distances   # optional, expensive
 """
 
 import os
@@ -77,24 +88,29 @@ def get_all_trials(preds_dir, algorithm, hparams_seed, n_trials,
 
 
 def get_record_info(records, algo, seed, test_env_idx):
+    """
+    Returns mean AND std of OOD accuracy across trial_seeds (matching
+    records), plus hparam metadata from the first matching record.
+    """
     matching = [r for r in records
                 if r['algorithm'] == algo
                 and r['args']['hparams_seed'] == seed]
     if not matching:
         return None
-    ood_acc = np.mean([r[f'env{test_env_idx}_out_acc'] for r in matching])
+    accs = [r[f'env{test_env_idx}_out_acc'] for r in matching]
     hp = matching[0]['hparams']
     return {
-        'ood_acc': float(ood_acc),
-        'lr':      hp.get('lr', 0),
-        'lambda':  hp.get('irm_lambda', hp.get('mmd_gamma', None)),
-        'anneal':  hp.get('irm_penalty_anneal_iters', None),
-        'bs':      hp.get('batch_size', None),
+        'ood_acc':     float(np.mean(accs)),
+        'ood_acc_std': float(np.std(accs)),
+        'lr':          hp.get('lr', 0),
+        'lambda':      hp.get('irm_lambda', hp.get('mmd_gamma', None)),
+        'anneal':      hp.get('irm_penalty_anneal_iters', None),
+        'bs':          hp.get('batch_size', None),
     }
 
 
 # ---------------------------------------------------------------------------
-# Metrics
+# Metrics (agreement / entropy) — paired by trial_seed, not Cartesian
 # ---------------------------------------------------------------------------
 
 def compute_agreement(preds_i, preds_j):
@@ -105,36 +121,62 @@ def compute_entropy(probs):
     return float(-np.sum(probs * np.log(probs + 1e-8), axis=1).mean())
 
 
+def get_entropy_mean_std(preds_dir, algo, seed, n_trials, test_env_idx):
+    """Per-trial entropy list -> (mean, std). None, None if unavailable."""
+    probs_list = get_all_trials(preds_dir, algo, seed, n_trials,
+                                test_env_idx, load_probs)
+    if not probs_list:
+        return None, None
+    per_trial_h = [compute_entropy(p) for p in probs_list]
+    return float(np.mean(per_trial_h)), float(np.std(per_trial_h))
+
+
 def get_id_agr(preds_dir, algo_a, algo_b, seed_a, seed_b,
-               n_trials, test_env_idx, n_envs):
-    id_agr_vals = []
-    for env_idx in range(n_envs):
-        if env_idx == test_env_idx:
-            continue
-        preds_a = get_all_trials(preds_dir, algo_a, seed_a,
-                                 n_trials, env_idx, load_predictions)
-        preds_b = get_all_trials(preds_dir, algo_b, seed_b,
-                                 n_trials, env_idx, load_predictions)
-        if not preds_a or not preds_b:
-            continue
-        for pa in preds_a:
-            for pb in preds_b:
-                id_agr_vals.append(compute_agreement(pa, pb))
-    return float(np.mean(id_agr_vals)) if id_agr_vals else None
+               n_trials, test_env_idx, n_envs, return_all=False):
+    """
+    ID agreement, paired by trial_seed (not all-vs-all across trials).
+    For each trial t, average agreement across all non-test envs, giving
+    one ID-agreement value per trial. Returns mean across trials by
+    default, or the list of n_trials values if return_all=True.
+    """
+    per_trial_agrs = []
+    for trial in range(n_trials):
+        env_agrs = []
+        for env_idx in range(n_envs):
+            if env_idx == test_env_idx:
+                continue
+            pa = load_predictions(preds_dir, algo_a, seed_a, trial, env_idx)
+            pb = load_predictions(preds_dir, algo_b, seed_b, trial, env_idx)
+            if pa is not None and pb is not None:
+                env_agrs.append(compute_agreement(pa, pb))
+        if env_agrs:
+            per_trial_agrs.append(float(np.mean(env_agrs)))
+    if not per_trial_agrs:
+        return None
+    if return_all:
+        return per_trial_agrs
+    return float(np.mean(per_trial_agrs))
 
 
 def get_ood_agr(preds_dir, algo_a, algo_b, seed_a, seed_b,
-                n_trials, test_env_idx):
-    preds_a = get_all_trials(preds_dir, algo_a, seed_a,
-                             n_trials, test_env_idx, load_predictions)
-    preds_b = get_all_trials(preds_dir, algo_b, seed_b,
-                             n_trials, test_env_idx, load_predictions)
-    if not preds_a or not preds_b:
+                n_trials, test_env_idx, return_all=False):
+    """
+    OOD agreement, paired by trial_seed (not all-vs-all across trials).
+    trial=0 of algo_a is compared only against trial=0 of algo_b, etc.
+    Returns mean across trials by default, or the list of n_trials
+    values if return_all=True.
+    """
+    per_trial_agrs = []
+    for trial in range(n_trials):
+        pa = load_predictions(preds_dir, algo_a, seed_a, trial, test_env_idx)
+        pb = load_predictions(preds_dir, algo_b, seed_b, trial, test_env_idx)
+        if pa is not None and pb is not None:
+            per_trial_agrs.append(compute_agreement(pa, pb))
+    if not per_trial_agrs:
         return None
-    return float(np.mean([
-        compute_agreement(pa, pb)
-        for pa in preds_a for pb in preds_b
-    ]))
+    if return_all:
+        return per_trial_agrs
+    return float(np.mean(per_trial_agrs))
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +225,7 @@ def _fit_line(id_agrs, ood_agrs):
 
 
 def compute_erm_line(preds_dir, valid_seeds, n_trials, test_env_idx, n_envs):
-    """ERM-ERM reference line: all unordered pairs among valid_seeds."""
+    """ERM-ERM reference line built from valid_a (fixed, not per-algo_b)."""
     id_agrs, ood_agrs = [], []
     for seed_i, seed_j in combinations(valid_seeds, 2):
         id_agr  = get_id_agr(preds_dir, 'ERM', 'ERM', seed_i, seed_j,
@@ -200,7 +242,6 @@ def compute_erm_line(preds_dir, valid_seeds, n_trials, test_env_idx, n_envs):
 
 def compute_cross_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
                        n_trials, test_env_idx, n_envs):
-    """algo_a-algo_b line over ALL cross pairs (seed_i in valid_a x seed_j in valid_b)."""
     id_agrs, ood_agrs = [], []
     for seed_i in valid_a:
         for seed_j in valid_b:
@@ -211,6 +252,8 @@ def compute_cross_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
             if id_agr is not None and ood_agr is not None:
                 id_agrs.append(id_agr)
                 ood_agrs.append(ood_agr)
+    if len(id_agrs) < 2:
+        return None
     return _fit_line(id_agrs, ood_agrs)
 
 
@@ -220,11 +263,6 @@ def compute_cross_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
 
 def compute_candidate_agreement(preds_dir, candidate_seeds, algo_b,
                                 n_trials, test_env_idx):
-    """
-    Mean OOD agreement between all pairs of candidate algo_b seeds.
-    High -> candidates converged to same solution -> genuine escape.
-    Low  -> candidates scattered -> degenerate.
-    """
     if len(candidate_seeds) < 2:
         return None
     agr_vals = []
@@ -237,7 +275,7 @@ def compute_candidate_agreement(preds_dir, candidate_seeds, algo_b,
 
 
 # ---------------------------------------------------------------------------
-# Main computation
+# Main diagnostic computation
 # ---------------------------------------------------------------------------
 
 def compute_cross_algorithm_agreement(
@@ -252,11 +290,12 @@ def compute_cross_algorithm_agreement(
     entropy_threshold=0.9,
     cross_line_r_threshold=0.3,
     disagreement_rate_threshold=0.5,
+    distance_metrics=None,          # list of 'mmd','wasserstein','pad' or None/[]
+    irm_anneal_threshold=None,      # exclude seeds with anneal >= this from cross-line
 ):
     with open(records_path) as f:
         records = json.load(f)
 
-    # Get n_classes from first probs file
     n_classes = 2
     for seed in range(n_hparams):
         for trial in range(n_trials):
@@ -271,8 +310,18 @@ def compute_cross_algorithm_agreement(
 
     print(f"\n  n_classes={n_classes}  max_entropy={max_entropy:.4f}")
     print(f"  entropy_threshold={entropy_threshold}")
+    distance_metrics = [m.lower() for m in (distance_metrics or [])]
+    run_mmd  = 'mmd'         in distance_metrics
+    run_wass = 'wasserstein' in distance_metrics
+    run_pad  = 'pad'         in distance_metrics
+    run_any  = run_mmd or run_wass or run_pad
 
-    # ---- Step 0: entropy filter ----
+    if run_any:
+        print(f"  distance metrics: {', '.join(distance_metrics)}")
+    else:
+        print(f"  distance metrics: OFF (use --distance_metrics mmd wasserstein pad)")
+
+    # ---- Step 0: symmetric entropy filter ----
     valid_a, excluded_a = get_valid_seeds(preds_dir, algo_a, n_hparams, n_trials,
                                           test_env_idx, max_entropy, entropy_threshold)
     valid_b, excluded_b = get_valid_seeds(preds_dir, algo_b, n_hparams, n_trials,
@@ -289,109 +338,188 @@ def compute_cross_algorithm_agreement(
               ', '.join(f"{s}({h:.3f})" for s, h in excluded_b))
     print(f"  Valid seeds (both, {len(valid_seeds)}/{n_hparams}): {valid_seeds}")
 
-    # ---- Step 1a: ERM-ERM reference line ----
+    # ---- Step 1a: ERM-ERM reference line (built from valid_a, fixed) ----
     print(f"\n  Computing {algo_a}-{algo_a} reference line...")
-    erm_line = compute_erm_line(preds_dir, valid_seeds, n_trials, test_env_idx, n_envs)
+    erm_line = compute_erm_line(preds_dir, valid_a, n_trials, test_env_idx, n_envs)
     erm_ood_median = erm_line['ood_median']
-
     print(f"  {algo_a}-{algo_a}: R={erm_line['R']:+.3f}  "
-          f"slope={erm_line['slope']:.3f}  "
-          f"intercept={erm_line['intercept']:.3f}  "
-          f"ood_median={erm_ood_median:.3f}  "
-          f"n_pairs={erm_line['n_pairs']}")
+          f"slope={erm_line['slope']:.3f}  intercept={erm_line['intercept']:.3f}  "
+          f"ood_median={erm_ood_median:.3f}  n_pairs={erm_line['n_pairs']}")
 
-    # ---- Step 1b: algo_a-algo_b cross-pair line (misspecification probe) ----
+    # ---- Step 1b: algo_a-algo_b cross-pair line ----
     print(f"\n  Computing {algo_a}-{algo_b} cross-pair line...")
-    cross_line = compute_cross_line(preds_dir, valid_seeds, valid_seeds,
+    valid_seeds_cross = valid_seeds
+    if irm_anneal_threshold is not None:
+        valid_seeds_cross = [
+            s for s in valid_seeds
+            if (get_record_info(records, algo_b, s, test_env_idx) or {}).get('anneal') is None
+            or (get_record_info(records, algo_b, s, test_env_idx) or {}).get('anneal') < irm_anneal_threshold
+        ]
+        n_filtered = len(valid_seeds) - len(valid_seeds_cross)
+        if n_filtered:
+            print(f"  Cross-line: excluded {n_filtered} high-anneal seeds "
+                  f"(anneal >= {irm_anneal_threshold}): "
+                  f"{[s for s in valid_seeds if s not in valid_seeds_cross]}")
+    cross_line = compute_cross_line(preds_dir, valid_seeds_cross, valid_seeds_cross,
                                     algo_a, algo_b, n_trials, test_env_idx, n_envs)
+    if cross_line is None:
+        print(f"  {algo_a}-{algo_b}: insufficient valid seeds for cross-pair line (n<2)")
+        cross_line_misspecified = None
+    else:
+        print(f"  {algo_a}-{algo_b}: R={cross_line['R']:+.3f}  "
+              f"slope={cross_line['slope']:.3f}  intercept={cross_line['intercept']:.3f}  "
+              f"ood_median={cross_line['ood_median']:.3f}  n_pairs={cross_line['n_pairs']}")
+        cross_line_misspecified = cross_line['R'] >= cross_line_r_threshold
+        cross_symbol = ('misspecified (shared trend, ERM sufficient)'
+                        if cross_line_misspecified
+                        else 'well-specified (separate trend, DG may help)')
+        print(f"  {algo_a}-{algo_b} R >= {cross_line_r_threshold}? "
+              f"{cross_line_misspecified}  -> {cross_symbol}")
 
-    print(f"  {algo_a}-{algo_b}: R={cross_line['R']:+.3f}  "
-          f"slope={cross_line['slope']:.3f}  "
-          f"intercept={cross_line['intercept']:.3f}  "
-          f"ood_median={cross_line['ood_median']:.3f}  "
-          f"n_pairs={cross_line['n_pairs']}")
-
-    cross_line_misspecified = cross_line['R'] >= cross_line_r_threshold
-    cross_symbol = 'misspecified' if cross_line_misspecified else 'well-specified'
-    print(f"  {algo_a}-{algo_b} R >= {cross_line_r_threshold}? "
-          f"{cross_line_misspecified}  -> {cross_symbol}")
-
-    # ---- Step 2: same-seed algo_a-algo_b pairs -> candidate / on-line ----
+    # ---- Step 2: same-seed pairs ----
     print(f"\n  Computing {algo_a}-{algo_b} same-seed pairs...")
-    print(f"\n  {'seed':>4} | "
-          f"{'ID_agr':>6} | {'OOD_agr':>7} | "
-          f"{'pred_OOD':>8} | {'|dev|':>6} | "
-          f"{'rel_h_b':>7} | {'dH/max':>7} | "
-          f"{'acc_'+algo_a:>8} | {'acc_'+algo_b:>8} | "
-          f"{'H('+algo_a+')':>7} | {'H('+algo_b+')':>7} | "
-          f"{'lambda/gamma':>12} | {'anneal':>6} | step2_status")
-    print(f"  {'-'*137}")
+
+    def _ms(v, s, width=14, p=3):
+        """Format 'mean ± std' as a single fixed-width string."""
+        if v is None:
+            return f"{'—':>{width}}"
+        s_str = f"{s:.{p}f}" if s is not None else "?"
+        return f"{v:.{p}f}±{s_str}"[:width].rjust(width)
+
+    base_header = (f"  {'seed':>4} | "
+                   f"{'ID_agr':>14} | {'OOD_agr':>14} | {'pred_OOD':>8} | {'|dev|':>6} | "
+                   f"{'rel_h_b':>7} | {'dH/max':>7} | "
+                   f"{'acc_'+algo_a:>14} | {'acc_'+algo_b:>14} | "
+                   f"{'H('+algo_a+')':>14} | {'H('+algo_b+')':>14}")
+    dist_header = ""
+    if run_mmd:
+        dist_header += f" | {'mmd_x':>7} | {'mmd_s':>7}"
+    if run_wass:
+        dist_header += f" | {'wss_x':>7} | {'wss_s':>7}"
+    if run_pad:
+        dist_header += f" | {'pad_x':>7} | {'pad_s':>7}"
+    print(base_header + dist_header + f" | {'lambda':>10} | {'anneal':>6} | status")
+    print(f"  {'-'*(180 + len(dist_header))}")
 
     id_agrs, ood_agrs, deviations = [], [], []
+    id_agr_stds, ood_agr_stds = [], []
+    id_agr_all_trials, ood_agr_all_trials = [], []
     rel_dhs, rel_h_bs = [], []
     entropies_a, entropies_b = [], []
+    entropies_a_std, entropies_b_std = [], []
+    mmd_crosses, mmd_shifts = [], []
+    wass_crosses, wass_shifts = [], []
+    pad_crosses, pad_shifts = [], []
     seeds_used, step2_statuses = [], []
+    acc_bs_all = []
 
     eps = 1e-6
 
     for seed in valid_seeds:
-        id_agr  = get_id_agr(preds_dir, algo_a, algo_b, seed, seed,
-                             n_trials, test_env_idx, n_envs)
-        ood_agr = get_ood_agr(preds_dir, algo_a, algo_b, seed, seed,
-                              n_trials, test_env_idx)
-        if id_agr is None or ood_agr is None:
+        # Per-trial_seed values (list of up to n_trials numbers each)
+        id_agr_trials  = get_id_agr(preds_dir, algo_a, algo_b, seed, seed,
+                                    n_trials, test_env_idx, n_envs, return_all=True)
+        ood_agr_trials = get_ood_agr(preds_dir, algo_a, algo_b, seed, seed,
+                                     n_trials, test_env_idx, return_all=True)
+        if id_agr_trials is None or ood_agr_trials is None:
             continue
+
+        id_agr     = float(np.mean(id_agr_trials))
+        id_agr_std = float(np.std(id_agr_trials))
+        ood_agr     = float(np.mean(ood_agr_trials))
+        ood_agr_std = float(np.std(ood_agr_trials))
 
         id_probit_val   = probit(np.clip(id_agr, eps, 1 - eps))
         pred_ood_probit = erm_line['slope'] * id_probit_val + erm_line['intercept']
         pred_ood_agr    = float(normal_cdf(pred_ood_probit))
         deviation       = abs(ood_agr - pred_ood_agr)
 
-        probs_a   = get_all_trials(preds_dir, algo_a, seed, n_trials, test_env_idx, load_probs)
-        probs_b   = get_all_trials(preds_dir, algo_b, seed, n_trials, test_env_idx, load_probs)
-        entropy_a = float(np.mean([compute_entropy(p) for p in probs_a])) if probs_a else None
-        entropy_b = float(np.mean([compute_entropy(p) for p in probs_b])) if probs_b else None
+        entropy_a, entropy_a_std = get_entropy_mean_std(
+            preds_dir, algo_a, seed, n_trials, test_env_idx)
+        entropy_b, entropy_b_std = get_entropy_mean_std(
+            preds_dir, algo_b, seed, n_trials, test_env_idx)
         rel_h_b   = entropy_b / max_entropy if entropy_b is not None else None
-        rel_dH    = (entropy_b - entropy_a) / max_entropy \
-                    if entropy_b is not None and entropy_a is not None else None
+        rel_dH    = ((entropy_b - entropy_a) / max_entropy
+                     if entropy_b is not None and entropy_a is not None else None)
+
+        # Distance metrics — only computed when requested
+        mmd_c = mmd_s = wass_c = wass_s = pad_c = pad_s = None
+        if run_mmd or run_wass or run_pad:
+            probs_a_dist = get_all_trials(preds_dir, algo_a, seed, n_trials,
+                                          test_env_idx, load_probs)
+            probs_b_dist = get_all_trials(preds_dir, algo_b, seed, n_trials,
+                                          test_env_idx, load_probs)
+            id_probs_b   = _pool_id_probs(preds_dir, algo_b, seed, n_trials,
+                                          test_env_idx, n_envs)
+            if probs_a_dist and probs_b_dist:
+                cross_pairs = [(pa, pb) for pa in probs_a_dist for pb in probs_b_dist]
+                if run_mmd:
+                    mmd_c = float(np.mean([compute_mmd(pa, pb)
+                                           for pa, pb in cross_pairs]))
+                if run_wass:
+                    wass_c = float(np.mean([compute_wasserstein(pa, pb)
+                                            for pa, pb in cross_pairs]))
+                if run_pad:
+                    pad_c = float(np.mean([compute_pad(pa, pb)
+                                           for pa, pb in cross_pairs]))
+            if id_probs_b and probs_b_dist:
+                id_pool  = np.vstack(id_probs_b)
+                ood_pool = np.vstack(probs_b_dist)
+                if run_mmd:
+                    mmd_s  = compute_mmd(id_pool, ood_pool)
+                if run_wass:
+                    wass_s = compute_wasserstein(id_pool, ood_pool)
+                if run_pad:
+                    pad_s  = compute_pad(id_pool, ood_pool)
 
         step2 = 'candidate' if ood_agr < erm_ood_median else 'on line'
 
         info_a   = get_record_info(records, algo_a, seed, test_env_idx)
         info_b   = get_record_info(records, algo_b, seed, test_env_idx)
-        acc_a    = info_a['ood_acc'] if info_a else None
-        acc_b    = info_b['ood_acc'] if info_b else None
+        acc_a       = info_a['ood_acc']     if info_a else None
+        acc_a_std   = info_a['ood_acc_std'] if info_a else None
+        acc_b       = info_b['ood_acc']     if info_b else None
+        acc_b_std   = info_b['ood_acc_std'] if info_b else None
         lambda_b = info_b['lambda']  if info_b else None
         anneal_b = info_b['anneal']  if info_b else None
 
-        id_agrs.append(id_agr)
-        ood_agrs.append(ood_agr)
+        id_agrs.append(id_agr);         ood_agrs.append(ood_agr)
+        id_agr_stds.append(id_agr_std); ood_agr_stds.append(ood_agr_std)
+        id_agr_all_trials.append(id_agr_trials)
+        ood_agr_all_trials.append(ood_agr_trials)
         deviations.append(deviation)
-        rel_dhs.append(rel_dH)
-        rel_h_bs.append(rel_h_b)
-        entropies_a.append(entropy_a)
-        entropies_b.append(entropy_b)
-        seeds_used.append(seed)
-        step2_statuses.append(step2)
+        rel_dhs.append(rel_dH);   rel_h_bs.append(rel_h_b)
+        entropies_a.append(entropy_a); entropies_b.append(entropy_b)
+        entropies_a_std.append(entropy_a_std); entropies_b_std.append(entropy_b_std)
+        mmd_crosses.append(mmd_c);  mmd_shifts.append(mmd_s)
+        wass_crosses.append(wass_c); wass_shifts.append(wass_s)
+        pad_crosses.append(pad_c);   pad_shifts.append(pad_s)
+        seeds_used.append(seed);   step2_statuses.append(step2)
+        acc_bs_all.append(acc_b)
 
-        lambda_str = f"{lambda_b:12.1f}" if lambda_b is not None else f"{'—':>12}"
+        def _f(v, w=7, p=5):
+            return f"{v:{w}.{p}f}" if v is not None else f"{'—':>{w}}"
+
+        lambda_str = f"{lambda_b:10.1f}" if lambda_b is not None else f"{'—':>10}"
         anneal_str = f"{anneal_b:6d}"    if anneal_b is not None else f"{'—':>6}"
-        acc_a_str  = f"{acc_a:8.3f}"     if acc_a is not None else f"{'—':>8}"
-        acc_b_str  = f"{acc_b:8.3f}"     if acc_b is not None else f"{'—':>8}"
-        ha_str     = f"{entropy_a:7.4f}" if entropy_a is not None else f"{'—':>7}"
-        hb_str     = f"{entropy_b:7.4f}" if entropy_b is not None else f"{'—':>7}"
-        rhb_str    = f"{rel_h_b:7.3f}"   if rel_h_b is not None else f"{'—':>7}"
-        rdh_str    = f"{rel_dH:+7.3f}"   if rel_dH is not None else f"{'—':>7}"
 
-        print(f"  {seed:>4} | "
-              f"{id_agr:>6.3f} | {ood_agr:>7.3f} | "
-              f"{pred_ood_agr:>8.3f} | {deviation:>6.3f} | "
-              f"{rhb_str} | {rdh_str} | "
-              f"{acc_a_str} | {acc_b_str} | "
-              f"{ha_str} | {hb_str} | "
-              f"{lambda_str} | {anneal_str} | {step2}")
+        base = (f"  {seed:>4} | "
+                f"{_ms(id_agr, id_agr_std)} | "
+                f"{_ms(ood_agr, ood_agr_std)} | "
+                f"{pred_ood_agr:>8.3f} | {deviation:>6.3f} | "
+                f"{_f(rel_h_b)} | {_f(rel_dH, p=3):>7} | "
+                f"{_ms(acc_a, acc_a_std)} | {_ms(acc_b, acc_b_std)} | "
+                f"{_ms(entropy_a, entropy_a_std, p=4)} | {_ms(entropy_b, entropy_b_std, p=4)}")
+        dist_cols = ""
+        if run_mmd:
+            dist_cols += f" | {_f(mmd_c)} | {_f(mmd_s)}"
+        if run_wass:
+            dist_cols += f" | {_f(wass_c)} | {_f(wass_s)}"
+        if run_pad:
+            dist_cols += f" | {_f(pad_c)} | {_f(pad_s)}"
+        print(base + dist_cols + f" | {lambda_str} | {anneal_str} | {step2}")
 
-    # ---- Step 3: algo_b-algo_b agreement among candidates / on-line ----
+    # ---- Step 3: algo_b-algo_b agreement ----
     candidate_seeds = [seeds_used[i] for i, s in enumerate(step2_statuses)
                        if s == 'candidate']
     on_line_seeds   = [seeds_used[i] for i, s in enumerate(step2_statuses)
@@ -406,14 +534,10 @@ def compute_cross_algorithm_agreement(
         preds_dir, on_line_seeds, algo_b, n_trials, test_env_idx)
 
     print(f"\n  Step 3 — {algo_b}-{algo_b} agreement among candidates:")
-    if candidate_agreement is not None:
-        print(f"  {algo_b}-{algo_b} OOD agr (candidates): {candidate_agreement:.3f}")
-    else:
-        print(f"  {algo_b}-{algo_b} OOD agr (candidates): N/A")
-    if online_agreement is not None:
-        print(f"  {algo_b}-{algo_b} OOD agr (on line):    {online_agreement:.3f}")
-    else:
-        print(f"  {algo_b}-{algo_b} OOD agr (on line):    N/A")
+    print(f"  {algo_b}-{algo_b} OOD agr (candidates): " +
+          (f"{candidate_agreement:.3f}" if candidate_agreement is not None else "N/A"))
+    print(f"  {algo_b}-{algo_b} OOD agr (on line):    " +
+          (f"{online_agreement:.3f}" if online_agreement is not None else "N/A"))
     print(f"  {algo_a}-{algo_a} OOD median (reference):  {erm_ood_median:.3f}")
 
     # ---- Verdict ----
@@ -427,55 +551,600 @@ def compute_cross_algorithm_agreement(
     else:
         disagreement_rate = candidate_agreement / erm_ood_median
         genuine_escape    = disagreement_rate > disagreement_rate_threshold
-        dg_verdict        = 'DG useful' if genuine_escape else 'DG not useful'
+        dg_verdict        = ('reproducible divergence' if genuine_escape
+                             else 'divergence looks like noise')
+
+    # Distance metrics summary (only when computed)
+    if run_any:
+        print(f"\n  Distance metrics summary (observational):")
+        names_and_lists = []
+        if run_mmd:
+            names_and_lists.append(('mmd', mmd_crosses, mmd_shifts))
+        if run_wass:
+            names_and_lists.append(('wasserstein', wass_crosses, wass_shifts))
+        if run_pad:
+            names_and_lists.append(('pad', pad_crosses, pad_shifts))
+        for name, cross_vals_raw, shift_vals_raw in names_and_lists:
+            cross_pairs = [(v, a) for v, a in zip(cross_vals_raw, acc_bs_all)
+                           if v is not None and a is not None]
+            shift_pairs = [(v, a) for v, a in zip(shift_vals_raw, acc_bs_all)
+                           if v is not None and a is not None]
+            if cross_pairs:
+                cv  = [v for v, _ in cross_pairs]
+                ca  = [a for _, a in cross_pairs]
+                r_c = pearsonr(cv, ca)[0] if len(cv) >= 3 else float('nan')
+                print(f"  {name}_cross: range=[{min(cv):.5f}, {max(cv):.5f}]  "
+                      f"mean={np.mean(cv):.5f}  r(acc_{algo_b})={r_c:+.3f}")
+            if shift_pairs:
+                sv  = [v for v, _ in shift_pairs]
+                sa  = [a for _, a in shift_pairs]
+                r_s = pearsonr(sv, sa)[0] if len(sv) >= 3 else float('nan')
+                print(f"  {name}_shift: range=[{min(sv):.5f}, {max(sv):.5f}]  "
+                      f"mean={np.mean(sv):.5f}  r(acc_{algo_b})={r_s:+.3f}")
 
     results = {
-        'erm_line':                     erm_line,
-        'cross_line':                   cross_line,
-        'cross_line_misspecified':      cross_line_misspecified,
-        'id_agrs':                      id_agrs,
-        'ood_agrs':                     ood_agrs,
-        'deviations':                   deviations,
-        'rel_dhs':                      rel_dhs,
-        'rel_h_bs':                     rel_h_bs,
-        'entropies_a':                  entropies_a,
-        'entropies_b':                  entropies_b,
-        'seeds_used':                   seeds_used,
-        'step2_statuses':               step2_statuses,
-        'candidate_seeds':              candidate_seeds,
-        'on_line_seeds':                on_line_seeds,
-        'candidate_agreement':          candidate_agreement,
-        'online_agreement':             online_agreement,
-        'genuine_escape':               genuine_escape,
-        'dg_verdict':                   dg_verdict,
-        'n_candidates':                 n_candidates,
-        'n_on_line':                    n_on_line,
-        'disagreement_rate':            disagreement_rate,
-        'n_pairs':                      len(id_agrs),
-        'n_valid_seeds':                len(valid_seeds),
-        'algo_a':                       algo_a,
-        'algo_b':                       algo_b,
-        'max_entropy':                  max_entropy,
-        'n_classes':                    n_classes,
-        'cross_line_r_threshold':           cross_line_r_threshold,
-        'disagreement_rate_threshold':      disagreement_rate_threshold,
+        'erm_line':                erm_line,
+        'cross_line':              cross_line,
+        'cross_line_misspecified': cross_line_misspecified,
+        'id_agrs':                 id_agrs,
+        'id_agr_stds':             id_agr_stds,
+        'id_agr_all_trials':       id_agr_all_trials,
+        'ood_agrs':                ood_agrs,
+        'ood_agr_stds':            ood_agr_stds,
+        'ood_agr_all_trials':      ood_agr_all_trials,
+        'deviations':              deviations,
+        'rel_dhs':                 rel_dhs,
+        'rel_h_bs':                rel_h_bs,
+        'entropies_a':             entropies_a,
+        'entropies_a_std':         entropies_a_std,
+        'entropies_b':             entropies_b,
+        'entropies_b_std':         entropies_b_std,
+        'mmd_crosses':             mmd_crosses,
+        'mmd_shifts':              mmd_shifts,
+        'wass_crosses':            wass_crosses,
+        'wass_shifts':             wass_shifts,
+        'pad_crosses':             pad_crosses,
+        'pad_shifts':              pad_shifts,
+        'seeds_used':              seeds_used,
+        'step2_statuses':          step2_statuses,
+        'candidate_seeds':         candidate_seeds,
+        'on_line_seeds':           on_line_seeds,
+        'candidate_agreement':     candidate_agreement,
+        'online_agreement':        online_agreement,
+        'genuine_escape':          genuine_escape,
+        'dg_verdict':              dg_verdict,
+        'n_candidates':            n_candidates,
+        'n_on_line':               n_on_line,
+        'disagreement_rate':       disagreement_rate,
+        'n_pairs':                 len(id_agrs),
+        'n_valid_seeds':           len(valid_seeds),
+        'valid_a':                 valid_a,
+        'valid_b':                 valid_b,
+        'algo_a':                  algo_a,
+        'algo_b':                  algo_b,
+        'max_entropy':             max_entropy,
+        'n_classes':               n_classes,
+        'cross_line_r_threshold':       cross_line_r_threshold,
+        'disagreement_rate_threshold':  disagreement_rate_threshold,
     }
-
     return results
+
+# ---------------------------------------------------------------------------
+# Per-algorithm model selection evaluation
+# ---------------------------------------------------------------------------
+
+def evaluate_per_algorithm(results_list, records_path, test_env_idx,
+                            algo_a, n_hparams):
+    """
+    For each algo_b in results_list, compare three seed-selection strategies:
+
+      Our pick (label-free, novel):
+        - MISSPECIFIED (cross_line_R >= threshold): pick from ON-LINE seeds —
+          seeds that agree with ERM, because ERM's shortcut transfers OOD.
+          Select the one with lowest rel_h_b (most confident).
+        - WELL-SPECIFIED (cross_line_R < threshold): pick from CANDIDATE seeds —
+          seeds that diverge from ERM, potentially finding invariant features.
+          Select the one with lowest rel_h_b (most confident divergent model).
+
+      IID pick (standard label-free baseline):
+        highest mean training-env accuracy across all valid seeds.
+
+      Oracle pick (ceiling, requires test labels):
+        highest OOD accuracy across all valid seeds.
+
+    Also includes ERM as a reference row (no candidate/on-line split).
+    Returns a list of dicts, one per algorithm including ERM.
+    """
+    with open(records_path) as f:
+        records = json.load(f)
+
+    rows = []
+
+    # ---- ERM reference row ----
+    erm_oracle_cands = []
+    erm_iid_cands    = []
+    for s in range(n_hparams):
+        info = get_record_info(records, algo_a, s, test_env_idx)
+        if not info:
+            continue
+        erm_oracle_cands.append((info['ood_acc'], s))
+        matching = [r for r in records
+                    if r['algorithm'] == algo_a
+                    and r['args']['hparams_seed'] == s]
+        if not matching:
+            continue
+        train_accs = [matching[0][k] for k in matching[0]
+                      if k.endswith('_out_acc')
+                      and k != f'env{test_env_idx}_out_acc']
+        if train_accs:
+            erm_iid_cands.append((float(np.mean(train_accs)), info['ood_acc'], s))
+
+    erm_oracle = max(erm_oracle_cands, key=lambda t: t[0]) if erm_oracle_cands else None
+    erm_iid    = max(erm_iid_cands,    key=lambda t: t[0]) if erm_iid_cands    else None
+
+    rows.append({
+        'algorithm':    algo_a,
+        'benchmark':    '—',
+        'our_seed':     None,
+        'our_acc':      None,
+        'our_pool':     'N/A',
+        'iid_seed':     erm_iid[2]    if erm_iid    else None,
+        'iid_acc':      erm_iid[1]    if erm_iid    else None,
+        'oracle_seed':  erm_oracle[1] if erm_oracle else None,
+        'oracle_acc':   erm_oracle[0] if erm_oracle else None,
+    })
+
+    # ---- DG algorithm rows ----
+    for res in results_list:
+        algo_b               = res['algo_b']
+        seeds_used           = res['seeds_used']
+        rel_h_bs             = res['rel_h_bs']
+        step2_statuses       = res['step2_statuses']
+        cross_line_misspec   = res['cross_line_misspecified']
+
+        # Select pool based on benchmark type
+        if cross_line_misspec:
+            # Misspecified: on-line seeds are trustworthy (ERM transfers)
+            pool_label = 'on-line'
+            pool = [
+                (rel_h_bs[i], seeds_used[i])
+                for i, s in enumerate(step2_statuses)
+                if s == 'on line' and rel_h_bs[i] is not None
+            ]
+        else:
+            # Well-specified: candidate seeds are interesting (ERM fails)
+            pool_label = 'candidates'
+            pool = [
+                (rel_h_bs[i], seeds_used[i])
+                for i, s in enumerate(step2_statuses)
+                if s == 'candidate' and rel_h_bs[i] is not None
+            ]
+
+        our_pick  = min(pool, key=lambda t: t[0]) if pool else None
+        our_seed  = our_pick[1] if our_pick else None
+        our_info  = get_record_info(records, algo_b, our_seed, test_env_idx) \
+                    if our_seed is not None else None
+        our_acc   = our_info['ood_acc'] if our_info else None
+
+        # Oracle and IID from valid_b seeds only
+        oracle_cands = []
+        iid_cands    = []
+        for s in res['valid_b']:
+            info = get_record_info(records, algo_b, s, test_env_idx)
+            if not info:
+                continue
+            oracle_cands.append((info['ood_acc'], s))
+            matching = [r for r in records
+                        if r['algorithm'] == algo_b
+                        and r['args']['hparams_seed'] == s]
+            if not matching:
+                continue
+            train_accs = [matching[0][k] for k in matching[0]
+                          if k.endswith('_out_acc')
+                          and k != f'env{test_env_idx}_out_acc']
+            if train_accs:
+                iid_cands.append((float(np.mean(train_accs)), info['ood_acc'], s))
+
+        oracle = max(oracle_cands, key=lambda t: t[0]) if oracle_cands else None
+        iid    = max(iid_cands,    key=lambda t: t[0]) if iid_cands    else None
+
+        rows.append({
+            'algorithm':   algo_b,
+            'benchmark':   'mis' if cross_line_misspec else 'well',
+            'our_seed':    our_seed,
+            'our_acc':     our_acc,
+            'our_pool':    pool_label,
+            'iid_seed':    iid[2]    if iid    else None,
+            'iid_acc':     iid[1]    if iid    else None,
+            'oracle_seed': oracle[1] if oracle else None,
+            'oracle_acc':  oracle[0] if oracle else None,
+        })
+
+    return rows
+
+
+def print_per_algorithm_selection(rows, dataset_name, test_env_name):
+    print(f"\n{'='*100}")
+    print(f"  Per-algorithm model selection — {dataset_name} (test: {test_env_name})")
+    print(f"  Our pick: min-entropy from on-line seeds (misspecified) or candidate seeds (well-specified)")
+    print(f"{'='*100}")
+    print(f"  {'Algo':<10} {'type':>6} {'pool':>12} | "
+          f"{'our seed':>8} {'our acc':>8} | "
+          f"{'iid seed':>8} {'iid acc':>8} | "
+          f"{'ora seed':>8} {'ora acc':>8} | "
+          f"{'Δ(our-ora)':>10} {'Δ(iid-ora)':>10} | "
+          f"{'our>iid?':>8}")
+    print(f"  {'─'*98}")
+    for row in rows:
+        our_str  = (f"{row['our_seed']:>8d} {row['our_acc']:>8.3f}"
+                    if row['our_acc'] is not None else f"{'N/A':>8} {'N/A':>8}")
+        iid_str  = (f"{row['iid_seed']:>8d} {row['iid_acc']:>8.3f}"
+                    if row['iid_acc'] is not None else f"{'N/A':>8} {'N/A':>8}")
+        ora_str  = (f"{row['oracle_seed']:>8d} {row['oracle_acc']:>8.3f}"
+                    if row['oracle_acc'] is not None else f"{'N/A':>8} {'N/A':>8}")
+        gap_our  = (f"{row['our_acc'] - row['oracle_acc']:>+10.3f}"
+                    if row['our_acc'] is not None and row['oracle_acc'] is not None
+                    else f"{'N/A':>10}")
+        gap_iid  = (f"{row['iid_acc'] - row['oracle_acc']:>+10.3f}"
+                    if row['iid_acc'] is not None and row['oracle_acc'] is not None
+                    else f"{'N/A':>10}")
+        beats    = ('✓' if row['our_acc'] is not None
+                    and row['iid_acc'] is not None
+                    and row['our_acc'] > row['iid_acc'] else '✗') \
+                   if row['our_acc'] is not None else '—'
+        print(f"  {row['algorithm']:<10} {row['benchmark']:>6} {row['our_pool']:>12} | "
+              f"{our_str} | {iid_str} | {ora_str} | "
+              f"{gap_our} {gap_iid} | {beats:>8}")
+
 
 
 # ---------------------------------------------------------------------------
-# Print table
+# Selection strategy ablation
+# ---------------------------------------------------------------------------
+
+def compare_selection_strategies(results_list, records_path, test_env_idx,
+                                  algo_a, n_hparams):
+    """
+    For each algo_b, compare five label-free seed-selection strategies,
+    all applied within the benchmark-type-appropriate pool
+    (on-line for misspecified, candidates for well-specified):
+
+      1. min_entropy   : lowest rel_h_b (most confident model, current method)
+      2. max_dev       : largest |dev| from ERM line (well-spec) /
+                         smallest |dev| from ERM line (mis-spec) — adaptive
+      3. max_rel_dH    : largest entropy increase relative to ERM (well-spec) /
+                         smallest rel_dH (mis-spec) — adaptive
+      4. min_mmd_shift : smallest MMD between DG ID-pooled and DG OOD
+                         (most invariant predictions — benchmark-independent)
+                         Only available when mmd_shift was computed.
+      5. max_mmd_cross : largest MMD between ERM OOD and DG OOD (well-spec) /
+                         smallest mmd_cross (mis-spec) — adaptive.
+                         Only available when mmd_cross was computed.
+
+    Returns list of dicts, one per (algo_b, strategy).
+    """
+    with open(records_path) as f:
+        records = json.load(f)
+
+    rows = []
+
+    for res in results_list:
+        algo_b             = res['algo_b']
+        seeds_used         = res['seeds_used']
+        rel_h_bs           = res['rel_h_bs']
+        rel_dhs            = res['rel_dhs']
+        deviations         = res['deviations']
+        mmd_crosses        = res['mmd_crosses']
+        mmd_shifts         = res['mmd_shifts']
+        step2_statuses     = res['step2_statuses']
+        cross_line_misspec = res['cross_line_misspecified']
+
+        # Oracle for this algo_b (from valid_b)
+        oracle_cands = []
+        for s in res['valid_b']:
+            info = get_record_info(records, algo_b, s, test_env_idx)
+            if info:
+                oracle_cands.append((info['ood_acc'], s))
+        oracle = max(oracle_cands, key=lambda t: t[0]) if oracle_cands else None
+
+        # Pool indices
+        if cross_line_misspec:
+            pool_idx = [i for i, s in enumerate(step2_statuses) if s == 'on line']
+            pool_label = 'on-line'
+        else:
+            pool_idx = [i for i, s in enumerate(step2_statuses) if s == 'candidate']
+            pool_label = 'candidates'
+
+        if not pool_idx:
+            continue
+
+        def _pick(signal_vals, higher_is_better):
+            pairs = [(signal_vals[i], seeds_used[i])
+                     for i in pool_idx if signal_vals[i] is not None]
+            if not pairs:
+                return None, None
+            chosen = max(pairs, key=lambda t: t[0]) if higher_is_better \
+                     else min(pairs, key=lambda t: t[0])
+            seed = chosen[1]
+            info = get_record_info(records, algo_b, seed, test_env_idx)
+            return seed, info['ood_acc'] if info else None
+
+        # 1. min entropy (lower is better regardless of type)
+        s1_seed, s1_acc = _pick(rel_h_bs, higher_is_better=False)
+
+        # 2. adaptive deviation:
+        #    well-specified -> max |dev|, misspecified -> min |dev|
+        s2_seed, s2_acc = _pick(deviations,
+                                 higher_is_better=not cross_line_misspec)
+
+        # 3. adaptive rel_dH:
+        #    well-specified -> max rel_dH, misspecified -> min rel_dH
+        s3_seed, s3_acc = _pick(rel_dhs,
+                                 higher_is_better=not cross_line_misspec)
+
+        # 4. min mmd_shift (always: lower = more invariant, better)
+        has_mmd_shift = any(v is not None for v in mmd_shifts)
+        if has_mmd_shift:
+            s4_seed, s4_acc = _pick(mmd_shifts, higher_is_better=False)
+        else:
+            s4_seed = s4_acc = None
+
+        # 5. adaptive mmd_cross:
+        #    well-specified -> max mmd_cross, misspecified -> min mmd_cross
+        has_mmd_cross = any(v is not None for v in mmd_crosses)
+        if has_mmd_cross:
+            s5_seed, s5_acc = _pick(mmd_crosses,
+                                     higher_is_better=not cross_line_misspec)
+        else:
+            s5_seed = s5_acc = None
+
+        rows.append({
+            'algorithm':         algo_b,
+            'benchmark':         'mis' if cross_line_misspec else 'well',
+            'pool':              pool_label,
+            'oracle_seed':       oracle[1] if oracle else None,
+            'oracle_acc':        oracle[0] if oracle else None,
+            'min_entropy_seed':  s1_seed, 'min_entropy_acc':  s1_acc,
+            'adapt_dev_seed':    s2_seed, 'adapt_dev_acc':    s2_acc,
+            'adapt_dH_seed':     s3_seed, 'adapt_dH_acc':     s3_acc,
+            'min_mmd_shift_seed':s4_seed, 'min_mmd_shift_acc':s4_acc,
+            'adapt_mmd_x_seed':  s5_seed, 'adapt_mmd_x_acc':  s5_acc,
+        })
+
+    return rows
+
+
+def print_strategy_comparison(rows, dataset_name, test_env_name):
+    strategies = [
+        ('min_entropy',   'min H'),
+        ('adapt_dev',     'adap |dev|'),
+        ('adapt_dH',      'adap dH'),
+        ('min_mmd_shift', 'min mmd_s'),
+        ('adapt_mmd_x',   'adap mmd_x'),
+    ]
+    print(f"\n{'='*110}")
+    print(f"  Selection strategy comparison — {dataset_name} (test: {test_env_name})")
+    print(f"  Pool: on-line (misspecified) or candidates (well-specified). "
+          f"adap = direction flips by benchmark type.")
+    print(f"{'='*110}")
+    hdr = f"  {'Algo':<10} {'type':>5} {'pool':>12} | {'oracle':>14}"
+    for _, label in strategies:
+        hdr += f" | {label:>12}"
+    print(hdr)
+    print(f"  {'─'*108}")
+    for row in rows:
+        ora = (f"s={row['oracle_seed']} {row['oracle_acc']:.3f}"
+               if row['oracle_acc'] is not None else 'N/A')
+        line = (f"  {row['algorithm']:<10} {row['benchmark']:>5} "
+                f"{row['pool']:>12} | {ora:>14}")
+        for key, _ in strategies:
+            seed = row[f'{key}_seed']
+            acc  = row[f'{key}_acc']
+            if acc is None:
+                cell = f"{'—':>12}"
+            else:
+                gap  = acc - row['oracle_acc'] if row['oracle_acc'] is not None else 0
+                cell = f"s={seed} {acc:.3f}({gap:+.3f})"
+            line += f" | {cell:>12}"
+        print(line)
+    print(f"\n  Gap format: (our_acc − oracle_acc). "
+          f"min_mmd_shift and adap_mmd_x require --distance_metrics mmd.")
+
+
+
+def select_best_model(preds_dir, records, algo, valid_seeds, n_trials,
+                       test_env_idx, max_entropy):
+    """Lowest individual rel_h across all valid seeds (Stage 2)."""
+    candidates = []
+    for seed in valid_seeds:
+        probs = get_all_trials(preds_dir, algo, seed, n_trials,
+                               test_env_idx, load_probs)
+        if not probs:
+            continue
+        rel_h = float(np.mean([compute_entropy(p) for p in probs])) / max_entropy
+        candidates.append({'seed': seed, 'rel_h': rel_h})
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c['rel_h'])
+    best = candidates[0]
+    best['algorithm'] = algo
+    return best
+
+
+def compute_candidate_seeds_only(preds_dir, algo_a, algo_b, erm_line,
+                                  valid_seeds, n_trials, test_env_idx):
+    erm_ood_median = erm_line['ood_median']
+    return [
+        seed for seed in valid_seeds
+        if (get_ood_agr(preds_dir, algo_a, algo_b, seed, seed,
+                        n_trials, test_env_idx) or 1.0) < erm_ood_median
+        and get_ood_agr(preds_dir, algo_a, algo_b, seed, seed,
+                        n_trials, test_env_idx) is not None
+    ]
+
+
+def mean_relative_entropy(preds_dir, algo, seeds, n_trials, test_env_idx,
+                          max_entropy):
+    rel_hs = []
+    for seed in seeds:
+        probs = get_all_trials(preds_dir, algo, seed, n_trials,
+                               test_env_idx, load_probs)
+        if not probs:
+            continue
+        rel_h = float(np.mean([compute_entropy(p) for p in probs])) / max_entropy
+        rel_hs.append(rel_h)
+    return float(np.mean(rel_hs)) if rel_hs else None
+
+
+def recommend_algorithm_and_model(
+    preds_dir, records_path, test_env_idx, n_envs, n_hparams,
+    n_trials=3, algo_a='ERM', algo_bs=None,
+    entropy_threshold=0.9, cross_line_r_threshold=0.3,
+):
+    with open(records_path) as f:
+        records = json.load(f)
+    algo_bs = algo_bs or []
+
+    n_classes = 2
+    for seed in range(n_hparams):
+        for trial in range(n_trials):
+            probs = load_probs(preds_dir, algo_a, seed, trial, test_env_idx)
+            if probs is not None:
+                n_classes = probs.shape[1]
+                break
+        else:
+            continue
+        break
+    max_entropy = float(np.log(n_classes))
+
+    valid_a, _ = get_valid_seeds(preds_dir, algo_a, n_hparams, n_trials,
+                                  test_env_idx, max_entropy, entropy_threshold)
+    erm_line = compute_erm_line(preds_dir, valid_a, n_trials, test_env_idx, n_envs)
+
+    separate_trend_algos         = []
+    all_cross_lines              = {}
+    all_mean_candidate_entropies = {}
+
+    for algo_b in algo_bs:
+        valid_b, _ = get_valid_seeds(preds_dir, algo_b, n_hparams, n_trials,
+                                      test_env_idx, max_entropy, entropy_threshold)
+        valid_seeds = sorted(set(valid_a) & set(valid_b))
+        if len(valid_seeds) < 2:
+            continue
+        cross_line = compute_cross_line(preds_dir, valid_seeds, valid_seeds,
+                                         algo_a, algo_b, n_trials,
+                                         test_env_idx, n_envs)
+        if cross_line is None:
+            continue
+        all_cross_lines[algo_b] = cross_line['R']
+
+        if cross_line['R'] < cross_line_r_threshold:
+            candidate_seeds = compute_candidate_seeds_only(
+                preds_dir, algo_a, algo_b, erm_line, valid_seeds,
+                n_trials, test_env_idx)
+            mean_h = mean_relative_entropy(preds_dir, algo_b, candidate_seeds,
+                                           n_trials, test_env_idx, max_entropy)
+            all_mean_candidate_entropies[algo_b] = mean_h
+            if mean_h is not None:
+                separate_trend_algos.append((algo_b, cross_line['R'], mean_h, valid_b))
+
+    if separate_trend_algos:
+        separate_trend_algos.sort(key=lambda t: t[2])
+        chosen_algo, chosen_R, chosen_mean_h, chosen_valid = separate_trend_algos[0]
+        best = select_best_model(preds_dir, records, chosen_algo,
+                                  chosen_valid, n_trials, test_env_idx, max_entropy)
+        return {
+            'recommendation':               'use_dg',
+            'algorithm':                    chosen_algo,
+            'seed':                         best['seed'],
+            'rel_h':                        best['rel_h'],
+            'cross_line_R':                 chosen_R,
+            'mean_candidate_entropy':       chosen_mean_h,
+            'all_cross_lines':              all_cross_lines,
+            'all_mean_candidate_entropies': all_mean_candidate_entropies,
+            'valid_a':                      valid_a,
+        }
+    else:
+        best = select_best_model(preds_dir, records, algo_a, valid_a,
+                                  n_trials, test_env_idx, max_entropy)
+        return {
+            'recommendation':               'use_erm',
+            'algorithm':                    algo_a,
+            'seed':                         best['seed'] if best else None,
+            'rel_h':                        best['rel_h'] if best else None,
+            'cross_line_R':                 None,
+            'mean_candidate_entropy':       None,
+            'all_cross_lines':              all_cross_lines,
+            'all_mean_candidate_entropies': all_mean_candidate_entropies,
+            'valid_a':                      valid_a,
+        }
+
+
+def evaluate_selection_quality(selection, records_path, test_env_idx,
+                               algo_a, algo_bs, n_hparams):
+    with open(records_path) as f:
+        records = json.load(f)
+    all_algos = [algo_a] + list(algo_bs)
+    our_info  = get_record_info(records, selection['algorithm'],
+                                selection['seed'], test_env_idx)
+    our_acc   = our_info['ood_acc'] if our_info else None
+
+    oracle_candidates = []
+    iid_candidates    = []
+    for algo in all_algos:
+        for seed in range(n_hparams):
+            info = get_record_info(records, algo, seed, test_env_idx)
+            if info is None:
+                continue
+            oracle_candidates.append((info['ood_acc'], algo, seed))
+            matching = [r for r in records
+                        if r['algorithm'] == algo
+                        and r['args']['hparams_seed'] == seed]
+            if not matching:
+                continue
+            train_accs = [matching[0][k] for k in matching[0]
+                          if k.endswith('_out_acc')
+                          and k != f'env{test_env_idx}_out_acc']
+            if train_accs:
+                iid_candidates.append((float(np.mean(train_accs)),
+                                       info['ood_acc'], algo, seed))
+
+    if not oracle_candidates:
+        return None
+    oracle_acc, oracle_algo, oracle_seed = max(oracle_candidates, key=lambda t: t[0])
+    iid_result = None
+    if iid_candidates:
+        best_iid   = max(iid_candidates, key=lambda t: t[0])
+        iid_result = {'algorithm': best_iid[2], 'seed': best_iid[3],
+                      'ood_acc': best_iid[1]}
+    return {
+        'our_algorithm':     selection['algorithm'],
+        'our_seed':          selection['seed'],
+        'our_acc':           our_acc,
+        'oracle_acc':        float(oracle_acc),
+        'oracle_algorithm':  oracle_algo,
+        'oracle_seed':       oracle_seed,
+        'iid_acc':           iid_result['ood_acc']   if iid_result else None,
+        'iid_algorithm':     iid_result['algorithm'] if iid_result else None,
+        'iid_seed':          iid_result['seed']       if iid_result else None,
+        'gap_to_oracle':     float(oracle_acc) - our_acc if our_acc is not None else None,
+        'gap_to_oracle_iid': float(oracle_acc) - iid_result['ood_acc']
+                             if iid_result is not None else None,
+        'our_beats_iid':     (our_acc is not None and iid_result is not None
+                              and our_acc > iid_result['ood_acc']),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Print helpers
 # ---------------------------------------------------------------------------
 
 def print_table(results, dataset_name, test_env_name):
     print(f"\n{'='*80}")
     print(f"  Diagnostic summary — {dataset_name} (test: {test_env_name})")
     print(f"{'='*80}")
-
     if results is None:
-        print("  No results")
-        return
+        print("  No results"); return
 
     erm    = results['erm_line']
     cross  = results['cross_line']
@@ -486,86 +1155,129 @@ def print_table(results, dataset_name, test_env_name):
 
     print(f"  {algo_a}-{algo_a} R:                    {erm['R']:+.3f}  "
           f"(ood_median={erm['ood_median']:.3f}, n_pairs={erm['n_pairs']})")
-    print(f"  {algo_a}-{algo_b} R (cross-pair line):  {cross['R']:+.3f}  "
-          f"(ood_median={cross['ood_median']:.3f}, n_pairs={cross['n_pairs']})")
+    if cross is not None:
+        print(f"  {algo_a}-{algo_b} R (cross-pair line):  {cross['R']:+.3f}  "
+              f"(ood_median={cross['ood_median']:.3f}, n_pairs={cross['n_pairs']})")
+    else:
+        print(f"  {algo_a}-{algo_b} R (cross-pair line):  N/A (no valid seeds)")
 
     r_thresh = results['cross_line_r_threshold']
-    cross_symbol = '✗ misspecified' if results['cross_line_misspecified'] else '✓ well-specified'
-    print(f"  {algo_a}-{algo_b} R >= {r_thresh} -> {cross_symbol}")
-
+    if results['cross_line_misspecified'] is None:
+        print(f"  {algo_a}-{algo_b} R >= {r_thresh} -> N/A")
+    else:
+        cross_symbol = ('✗ misspecified (shared trend, ERM sufficient)'
+                        if results['cross_line_misspecified']
+                        else '✓ well-specified (separate trend, DG may help)')
+        print(f"  {algo_a}-{algo_b} R >= {r_thresh} -> {cross_symbol}")
     print(f"\n  {algo_b}-{algo_b} OOD agr (candidates): " +
           (f"{cand:.3f}" if cand is not None else "N/A"))
     print(f"  {algo_b}-{algo_b} OOD agr (on line):    " +
           (f"{onl:.3f}" if onl is not None else "N/A"))
     print(f"  {algo_a}-{algo_a} OOD median (ref):      {erm['ood_median']:.3f}")
-
     print(f"\n  Candidates (step 2): {results['n_candidates']}")
     print(f"  On line   (step 2):  {results['n_on_line']}")
 
     if results['genuine_escape'] is None:
-        print(f"\n  DG verdict: INCONCLUSIVE "
+        print(f"\n  Verdict: INCONCLUSIVE "
               f"(only {results['n_candidates']} candidate(s) after entropy filtering)")
     else:
-        dr      = results['disagreement_rate']
-        dr_thr  = results['disagreement_rate_threshold']
-        symbol  = '✓' if results['genuine_escape'] else '✗'
+        dr     = results['disagreement_rate']
+        dr_thr = results['disagreement_rate_threshold']
+        symbol = '✓' if results['genuine_escape'] else '✗'
         print(f"\n  Disagreement rate: {dr:.3f} (threshold={dr_thr})")
-        print(f"  DG verdict: {results['dg_verdict']} {symbol}")
+        print(f"  Verdict: {results['dg_verdict']} {symbol}")
 
     print(f"\n  {'─'*50}")
     print(f"  SUMMARY")
     print(f"  {'─'*50}")
-    print(f"  Misspecified ({algo_a}-{algo_b} R >= {r_thresh}): "
+    print(f"  Shared trend ({algo_a}-{algo_b} R >= {r_thresh}): "
           f"{results['cross_line_misspecified']}")
     if results['genuine_escape'] is not None:
-        print(f"  {algo_b} useful (disagreement_rate > "
-              f"{results['disagreement_rate_threshold']}): {results['genuine_escape']}")
+        print(f"  {algo_b} divergence reproducible: {results['genuine_escape']}")
     else:
-        print(f"  {algo_b} useful: inconclusive")
+        print(f"  {algo_b} divergence reproducible: inconclusive")
+
+
+def print_selection_report(selection, evaluation, dataset_name, test_env_name):
+    print(f"\n{'='*80}")
+    print(f"  Label-free model selection — {dataset_name} (test: {test_env_name})")
+    print(f"{'='*80}")
+    print(f"  Stage 1 — per algorithm (cross_line_R + mean candidate entropy):")
+    print(f"    {'algorithm':<12} {'cross_line_R':>12} {'mean_cand_rel_h':>16}")
+    for algo, R in selection['all_cross_lines'].items():
+        mean_h     = selection['all_mean_candidate_entropies'].get(algo)
+        mean_h_str = f"{mean_h:.3f}" if mean_h is not None else "N/A"
+        print(f"    {algo:<12} {R:>+12.3f} {mean_h_str:>16}")
+
+    print(f"\n  Recommendation: {selection['recommendation']}")
+    if selection['seed'] is not None:
+        print(f"  Selected: {selection['algorithm']} seed={selection['seed']} "
+              f"(rel_h={selection['rel_h']:.3f})")
+    if selection['cross_line_R'] is not None:
+        print(f"  (cross_line_R={selection['cross_line_R']:+.3f}, "
+              f"mean_candidate_rel_h={selection['mean_candidate_entropy']:.3f})")
+
+    if evaluation is not None:
+        print(f"\n  {'─'*50}")
+        print(f"  POST-HOC EVALUATION (accuracy used only to grade, not select)")
+        print(f"  {'─'*50}")
+        if evaluation['our_acc'] is not None:
+            print(f"  Our pick:    {evaluation['our_algorithm']:<10} "
+                  f"seed={evaluation['our_seed']} OOD_acc={evaluation['our_acc']:.3f}")
+        if evaluation['iid_acc'] is not None:
+            print(f"  IID pick:    {evaluation['iid_algorithm']:<10} "
+                  f"seed={evaluation['iid_seed']} OOD_acc={evaluation['iid_acc']:.3f}")
+        print(f"  Oracle pick: {evaluation['oracle_algorithm']:<10} "
+              f"seed={evaluation['oracle_seed']} OOD_acc={evaluation['oracle_acc']:.3f}")
+        if evaluation['gap_to_oracle'] is not None:
+            print(f"\n  Gap to oracle (ours):  {evaluation['gap_to_oracle']:+.3f}")
+        if evaluation['gap_to_oracle_iid'] is not None:
+            print(f"  Gap to oracle (IID):   {evaluation['gap_to_oracle_iid']:+.3f}")
+        if evaluation['our_beats_iid'] is not None:
+            symbol = '✓' if evaluation['our_beats_iid'] else '✗'
+            print(f"  Our selection beats IID selection: {evaluation['our_beats_iid']} {symbol}")
 
 
 # ---------------------------------------------------------------------------
-# Plot
+# Plotting
 # ---------------------------------------------------------------------------
+
+def _agreement_pct_ticks(all_agrs, n_ticks=8):
+    lo, hi = all_agrs.min() * 100, all_agrs.max() * 100
+    pad    = (hi - lo) * 0.1
+    lo, hi = max(lo - pad, 1), min(hi + pad, 99)
+    tick_pcts   = np.linspace(lo, hi, n_ticks)
+    tick_probit = probit(tick_pcts / 100.0)
+    return tick_pcts, tick_probit
+
 
 def plot_cross_algorithm(results, dataset_name, test_env_name, save_path=None):
-    """
-    Scatter plot: ID agreement (probit) vs OOD agreement (probit).
-      gray cloud + dashed line   : ERM-ERM reference pairs
-      orange cloud + dotted line : algo_a-algo_b ALL cross pairs
-      blue circles               : algo_a-algo_b same-seed 'on line'
-      red triangles              : algo_a-algo_b same-seed 'candidate'
-    """
-    erm   = results['erm_line']
-    cross = results['cross_line']
-    algo_a, algo_b = results['algo_a'], results['algo_b']
-    eps = 1e-6
+    erm    = results['erm_line']
+    cross  = results['cross_line']
+    algo_a = results['algo_a']
+    algo_b = results['algo_b']
+    eps    = 1e-6
 
     fig, ax = plt.subplots(figsize=(7.5, 6.5))
-
-    # ERM-ERM reference cloud + line
     erm_id_p  = probit(np.clip(np.array(erm['id_agrs']),  eps, 1 - eps))
     erm_ood_p = probit(np.clip(np.array(erm['ood_agrs']), eps, 1 - eps))
     ax.scatter(erm_id_p, erm_ood_p, s=15, color='lightgray', alpha=0.6, zorder=1,
                label=f'{algo_a}-{algo_a} pairs (n={len(erm_id_p)})')
     x1 = np.linspace(erm_id_p.min(), erm_id_p.max(), 100)
-    ax.plot(x1, erm['slope'] * x1 + erm['intercept'],
-            color='gray', linestyle='--', zorder=2,
-            label=f"{algo_a}-{algo_a} line (R={erm['R']:+.3f})")
+    ax.plot(x1, erm['slope'] * x1 + erm['intercept'], color='gray',
+            linestyle='--', zorder=2, label=f"{algo_a}-{algo_a} (R={erm['R']:+.3f})")
 
-    # algo_a-algo_b cross-pair cloud + line
     cross_id_p  = probit(np.clip(np.array(cross['id_agrs']),  eps, 1 - eps))
     cross_ood_p = probit(np.clip(np.array(cross['ood_agrs']), eps, 1 - eps))
-    ax.scatter(cross_id_p, cross_ood_p, s=8, color='lightsalmon', alpha=0.3, zorder=1,
+    ax.scatter(cross_id_p, cross_ood_p, s=8, color='lightsalmon',
+               alpha=0.3, zorder=1,
                label=f'{algo_a}-{algo_b} cross pairs (n={len(cross_id_p)})')
     x2 = np.linspace(cross_id_p.min(), cross_id_p.max(), 100)
-    ax.plot(x2, cross['slope'] * x2 + cross['intercept'],
-            color='tab:orange', linestyle=':', zorder=2,
-            label=f"{algo_a}-{algo_b} line (R={cross['R']:+.3f})")
+    ax.plot(x2, cross['slope'] * x2 + cross['intercept'], color='tab:orange',
+            linestyle=':', zorder=2, label=f"{algo_a}-{algo_b} (R={cross['R']:+.3f})")
 
-    # algo_a-algo_b same-seed points, colored by step2 status
-    id_p  = probit(np.clip(np.array(results['id_agrs']),  eps, 1 - eps))
-    ood_p = probit(np.clip(np.array(results['ood_agrs']), eps, 1 - eps))
+    id_p      = probit(np.clip(np.array(results['id_agrs']),  eps, 1 - eps))
+    ood_p     = probit(np.clip(np.array(results['ood_agrs']), eps, 1 - eps))
     statuses  = np.array(results['step2_statuses'])
     seeds     = results['seeds_used']
     cand_mask = statuses == 'candidate'
@@ -577,22 +1289,21 @@ def plot_cross_algorithm(results, dataset_name, test_env_name, save_path=None):
     ax.scatter(id_p[cand_mask], ood_p[cand_mask], s=70, color='tab:red',
                marker='^', edgecolor='k', zorder=3,
                label=f'{algo_a}-{algo_b} candidates (n={cand_mask.sum()})')
-
     for i, seed in enumerate(seeds):
         ax.annotate(str(seed), (id_p[i], ood_p[i]),
                     textcoords="offset points", xytext=(4, 4), fontsize=7)
 
-    ax.set_xlabel('ID agreement (probit)')
-    ax.set_ylabel('OOD agreement (probit)')
-
-    dr_str = (f", disagreement_rate={results['disagreement_rate']:.2f}"
+    all_agrs = np.concatenate([np.array(erm['id_agrs']), np.array(erm['ood_agrs']),
+                                np.array(cross['id_agrs']), np.array(cross['ood_agrs'])])
+    tick_pcts, tick_probit = _agreement_pct_ticks(all_agrs)
+    ax.set_xticks(tick_probit); ax.set_xticklabels([f"{p:.0f}" for p in tick_pcts])
+    ax.set_yticks(tick_probit); ax.set_yticklabels([f"{p:.0f}" for p in tick_pcts])
+    ax.set_xlabel('ID agreement (%)'); ax.set_ylabel('OOD agreement (%)')
+    dr_str = (f", DR={results['disagreement_rate']:.2f}"
               if results['disagreement_rate'] is not None else "")
     ax.set_title(f'{dataset_name} ({test_env_name})\n'
-                 f'{algo_a}-{algo_b} cross R={cross["R"]:+.3f}{dr_str}')
-
-    ax.legend(fontsize=8, loc='best')
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
+                 f'{algo_a}-{algo_b} R={cross["R"]:+.3f}{dr_str}')
+    ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout()
 
     if save_path:
         fig.savefig(save_path, dpi=150)
@@ -600,57 +1311,50 @@ def plot_cross_algorithm(results, dataset_name, test_env_name, save_path=None):
         plt.close(fig)
     else:
         plt.show()
-
     return fig
 
 
 def plot_multi_algorithm(results_list, dataset_name, test_env_name, save_path=None):
-    """
-    Overlay multiple algo_a-algo_b cross-pair lines on one plot, one per
-    algo_b, against a shared algo_a-algo_a (ERM-ERM) reference.
-
-    results_list: list of result dicts from compute_cross_algorithm_agreement,
-                   one per algo_b (all sharing the same algo_a).
-    """
-    eps = 1e-6
+    eps     = 1e-6
     fig, ax = plt.subplots(figsize=(8.5, 7.5))
+    algo_a  = results_list[0]['algo_a']
 
-    algo_a = results_list[0]['algo_a']
-
-    # ERM-ERM reference (from the first result; recomputed per-run but should
-    # be very similar across algo_b choices since it only depends on algo_a)
-    erm = results_list[0]['erm_line']
+    erm       = results_list[0]['erm_line']
     erm_id_p  = probit(np.clip(np.array(erm['id_agrs']),  eps, 1 - eps))
     erm_ood_p = probit(np.clip(np.array(erm['ood_agrs']), eps, 1 - eps))
     ax.scatter(erm_id_p, erm_ood_p, s=12, color='lightgray', alpha=0.4, zorder=1,
                label=f'{algo_a}-{algo_a} pairs (n={len(erm_id_p)})')
     x1 = np.linspace(erm_id_p.min(), erm_id_p.max(), 100)
-    ax.plot(x1, erm['slope'] * x1 + erm['intercept'],
-            color='gray', linestyle='--', zorder=2, linewidth=2,
+    ax.plot(x1, erm['slope'] * x1 + erm['intercept'], color='gray',
+            linestyle='--', zorder=2, linewidth=2,
             label=f"{algo_a}-{algo_a} (R={erm['R']:+.3f})")
 
-    colors = plt.cm.tab10(np.linspace(0, 1, max(len(results_list), 1)))
+    colors         = plt.cm.tab10(np.linspace(0, 1, max(len(results_list), 1)))
+    all_agrs_parts = [np.array(erm['id_agrs']), np.array(erm['ood_agrs'])]
 
     for res, color in zip(results_list, colors):
-        cross  = res['cross_line']
-        algo_b = res['algo_b']
+        cross  = res['cross_line']; algo_b = res['algo_b']
+        if cross is None:
+            ax.plot([], [], color=color, linestyle='-', linewidth=2, zorder=3,
+                    label=f"{algo_a}-{algo_b} (no valid seeds)")
+            continue
         cross_id_p  = probit(np.clip(np.array(cross['id_agrs']),  eps, 1 - eps))
         cross_ood_p = probit(np.clip(np.array(cross['ood_agrs']), eps, 1 - eps))
         x2 = np.linspace(cross_id_p.min(), cross_id_p.max(), 100)
-
-        dr = res['disagreement_rate']
+        dr     = res['disagreement_rate']
         dr_str = f"{dr:.2f}" if dr is not None else "N/A"
-
         ax.plot(x2, cross['slope'] * x2 + cross['intercept'],
                 color=color, linestyle='-', linewidth=2, zorder=3,
                 label=f"{algo_a}-{algo_b} (R={cross['R']:+.3f}, DR={dr_str})")
+        all_agrs_parts.extend([np.array(cross['id_agrs']), np.array(cross['ood_agrs'])])
 
-    ax.set_xlabel('ID agreement (probit)')
-    ax.set_ylabel('OOD agreement (probit)')
+    all_agrs = np.concatenate(all_agrs_parts)
+    tick_pcts, tick_probit = _agreement_pct_ticks(all_agrs)
+    ax.set_xticks(tick_probit); ax.set_xticklabels([f"{p:.0f}" for p in tick_pcts])
+    ax.set_yticks(tick_probit); ax.set_yticklabels([f"{p:.0f}" for p in tick_pcts])
+    ax.set_xlabel('ID agreement (%)'); ax.set_ylabel('OOD agreement (%)')
     ax.set_title(f'{dataset_name} ({test_env_name})\n{algo_a} vs DG algorithms')
-    ax.legend(fontsize=8, loc='best')
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
+    ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout()
 
     if save_path:
         fig.savefig(save_path, dpi=150)
@@ -658,7 +1362,6 @@ def plot_multi_algorithm(results_list, dataset_name, test_env_name, save_path=No
         plt.close(fig)
     else:
         plt.show()
-
     return fig
 
 
@@ -675,17 +1378,34 @@ if __name__ == '__main__':
     parser.add_argument('--n_hparams',      type=int, default=20)
     parser.add_argument('--n_trials',       type=int, default=3)
     parser.add_argument('--algo_a',         type=str, default='ERM')
-    parser.add_argument('--algo_b',         type=str, default=['IRM'], nargs='+',
-                         help='One or more algo_b names, e.g. --algo_b IRM VREx GroupDRO')
+    parser.add_argument('--algo_b',         type=str, default=['IRM'], nargs='+')
     parser.add_argument('--dataset_name',   type=str, default='Dataset')
     parser.add_argument('--test_env_name',  type=str, default='test')
     parser.add_argument('--entropy_threshold',           type=float, default=0.9)
     parser.add_argument('--cross_line_r_threshold',      type=float, default=0.3)
     parser.add_argument('--disagreement_rate_threshold', type=float, default=0.5)
-    parser.add_argument('--plot_path',      type=str,  default=None,
-                         help='If set with a single algo_b, save its individual plot here.')
-    parser.add_argument('--multi_plot_path', type=str, default=None,
-                         help='If set with multiple algo_b values, save the overlay plot here.')
+    parser.add_argument('--irm_anneal_threshold', type=int, default=None,
+                        help='Exclude seeds with irm_penalty_anneal_iters >= this '
+                             'from cross-line fit (they behave like ERM). '
+                             'E.g. --irm_anneal_threshold 5001')
+    parser.add_argument('--plot_path',       type=str, default=None)
+    parser.add_argument('--multi_plot_path', type=str, default=None)
+    parser.add_argument('--select',           action='store_true',
+                        help='Run label-free model selection pipeline.')
+    parser.add_argument('--evaluate_selection', action='store_true',
+                        help='Post-hoc: compare selection vs IID and Oracle.')
+    parser.add_argument('--per_algo_selection', action='store_true',
+                        help='Show per-algorithm selection vs IID vs Oracle table.')
+    parser.add_argument('--compare_strategies', action='store_true',
+                        help='Compare all selection strategies per algorithm '
+                             '(min entropy, adaptive dev, adaptive dH, '
+                             'min mmd_shift, adaptive mmd_cross).')
+    parser.add_argument('--distance_metrics', type=str, nargs='*',
+                        default=[],
+                        choices=['mmd', 'wasserstein', 'pad'],
+                        help='Distance metrics to compute per seed. '
+                             'Options: mmd wasserstein pad. '
+                             'Default: none (fast). Example: --distance_metrics mmd')
     args = parser.parse_args()
 
     results_list = []
@@ -703,20 +1423,68 @@ if __name__ == '__main__':
             entropy_threshold           = args.entropy_threshold,
             cross_line_r_threshold      = args.cross_line_r_threshold,
             disagreement_rate_threshold = args.disagreement_rate_threshold,
+            distance_metrics            = args.distance_metrics,
+            irm_anneal_threshold        = args.irm_anneal_threshold,
         )
         print_table(results, args.dataset_name, args.test_env_name)
         results_list.append(results)
-
-        # Individual plot: only if a single algo_b was requested and --plot_path given
         if len(args.algo_b) == 1 and args.plot_path:
             plot_cross_algorithm(results, args.dataset_name, args.test_env_name,
                                   save_path=args.plot_path)
 
-    # Multi-algorithm overlay: if multiple algo_b values, or --multi_plot_path explicitly given
     if len(results_list) > 1 or args.multi_plot_path:
         plot_multi_algorithm(results_list, args.dataset_name, args.test_env_name,
                               save_path=args.multi_plot_path)
     elif len(args.algo_b) == 1 and args.plot_path is None:
-        # default: show single-algorithm plot interactively if nothing else requested
-        plot_cross_algorithm(results_list[0], args.dataset_name, args.test_env_name,
-                              save_path=None)
+        plot_cross_algorithm(results_list[0], args.dataset_name,
+                              args.test_env_name, save_path=None)
+
+    # Per-algorithm selection table
+    if args.per_algo_selection:
+        per_algo_rows = evaluate_per_algorithm(
+            results_list = results_list,
+            records_path = args.records_path,
+            test_env_idx = args.test_env_idx,
+            algo_a       = args.algo_a,
+            n_hparams    = args.n_hparams,
+        )
+        print_per_algorithm_selection(
+            per_algo_rows, args.dataset_name, args.test_env_name)
+
+    # Strategy ablation table
+    if args.compare_strategies:
+        strat_rows = compare_selection_strategies(
+            results_list = results_list,
+            records_path = args.records_path,
+            test_env_idx = args.test_env_idx,
+            algo_a       = args.algo_a,
+            n_hparams    = args.n_hparams,
+        )
+        print_strategy_comparison(strat_rows, args.dataset_name, args.test_env_name)
+
+    # Full pipeline selection
+    if args.select:
+        selection = recommend_algorithm_and_model(
+            preds_dir              = args.preds_dir,
+            records_path           = args.records_path,
+            test_env_idx           = args.test_env_idx,
+            n_envs                 = args.n_envs,
+            n_hparams              = args.n_hparams,
+            n_trials               = args.n_trials,
+            algo_a                 = args.algo_a,
+            algo_bs                = args.algo_b,
+            entropy_threshold      = args.entropy_threshold,
+            cross_line_r_threshold = args.cross_line_r_threshold,
+        )
+        evaluation = None
+        if args.evaluate_selection:
+            evaluation = evaluate_selection_quality(
+                selection    = selection,
+                records_path = args.records_path,
+                test_env_idx = args.test_env_idx,
+                algo_a       = args.algo_a,
+                algo_bs      = args.algo_b,
+                n_hparams    = args.n_hparams,
+            )
+        print_selection_report(selection, evaluation,
+                                args.dataset_name, args.test_env_name)

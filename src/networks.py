@@ -41,6 +41,16 @@ class CLIPFeaturizer(nn.Module):
         self.n_outputs = 512
         self.dropout   = nn.Dropout(hparams.get('resnet_dropout', 0.0))
 
+        # Freeze all parameters, then unfreeze last transformer block + head
+        for param in self.model.parameters():
+            param.requires_grad = False
+        for param in self.model.transformer.resblocks[-1].parameters():
+            param.requires_grad = True
+        for param in self.model.ln_post.parameters():
+            param.requires_grad = True
+        if self.model.proj is not None:
+            self.model.proj.requires_grad = True
+
     def forward(self, x):
         return self.dropout(self.model(x))
 
