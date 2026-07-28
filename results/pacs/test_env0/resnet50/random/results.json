@@ -266,5 +266,69 @@
         "weight_decay_g": 4.7725335012035225e-06
       }
     }
+  },
+  "VREx": {
+    "IIDAccuracySelectionMethod": {
+      "env0_mean": 0.8638956805215975,
+      "env0_std": 0.014983517775754063,
+      "env1_mean": 0.9700854700854701,
+      "env1_std": 0.006290427967469954,
+      "env2_mean": 0.9900199600798403,
+      "env2_std": 0.0037341890087563886,
+      "env3_mean": 0.9605095541401273,
+      "env3_std": 0.010244023848675003,
+      "hparams_seed": 12,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.1,
+        "vit_dropout": 0.1,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "vrex_lambda": 164.0855608535746,
+        "vrex_penalty_anneal_iters": 443,
+        "lr": 2.3956561249348397e-05,
+        "weight_decay": 3.6197809989373245e-06,
+        "batch_size": 42
+      }
+    },
+    "OracleSelectionMethod": {
+      "env0_mean": 0.8475957620211899,
+      "env0_std": 0.025746648735014366,
+      "env1_mean": 0.9608262108262108,
+      "env1_std": 0.007867066251557897,
+      "env2_mean": 0.9810379241516965,
+      "env2_std": 0.006152109783402197,
+      "env3_mean": 0.9486199575371549,
+      "env3_std": 0.006925480437494729,
+      "hparams_seed": 1,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.5,
+        "vit_dropout": 0.0,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "vrex_lambda": 1.397565863646722,
+        "vrex_penalty_anneal_iters": 32,
+        "lr": 2.1013712179831686e-05,
+        "weight_decay": 0.00464042443007805,
+        "batch_size": 32
+      }
+    }
   }
 }
