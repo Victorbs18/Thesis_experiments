@@ -330,5 +330,67 @@
         "batch_size": 32
       }
     }
+  },
+  "CORAL": {
+    "IIDAccuracySelectionMethod": {
+      "env0_mean": 0.8647106764466178,
+      "env0_std": 0.01897383329555473,
+      "env1_mean": 0.9480056980056979,
+      "env1_std": 0.014838081663817412,
+      "env2_mean": 0.9800399201596806,
+      "env2_std": 0.007858291291428954,
+      "env3_mean": 0.9524416135881104,
+      "env3_std": 0.00433037750623591,
+      "hparams_seed": 12,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.1,
+        "vit_dropout": 0.1,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "mmd_gamma": 0.3317512197227543,
+        "lr": 2.3956561249348397e-05,
+        "weight_decay": 3.6197809989373245e-06,
+        "batch_size": 42
+      }
+    },
+    "OracleSelectionMethod": {
+      "env0_mean": 0.8647106764466178,
+      "env0_std": 0.01897383329555473,
+      "env1_mean": 0.9480056980056979,
+      "env1_std": 0.014838081663817412,
+      "env2_mean": 0.9800399201596806,
+      "env2_std": 0.007858291291428954,
+      "env3_mean": 0.9524416135881104,
+      "env3_std": 0.00433037750623591,
+      "hparams_seed": 12,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.1,
+        "vit_dropout": 0.1,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "mmd_gamma": 0.3317512197227543,
+        "lr": 2.3956561249348397e-05,
+        "weight_decay": 3.6197809989373245e-06,
+        "batch_size": 42
+      }
+    }
   }
 }
