@@ -22,151 +22,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'DomainBed'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# ---------------------------------------------------------------------------
-# Dataset configs
-# ---------------------------------------------------------------------------
-
-CONFIGS = [
-    {
-        'name':          'ColoredMNIST (env2)',
-        'records_path':  'results/coloredmnist/test_env2/cnn/random/records.json',
-        'preds_dir':     'results/coloredmnist/test_env2/cnn/random/models',
-        'test_env_idx':  2,
-        'n_envs':        3,
-        'dtype':         'coloredmnist',
-        'data_dir':      './data',
-        'class_names':   ['label_0 (y<5)', 'label_1 (y≥5)'],
-    },
-    {
-        'name':          'RotatedMNIST (env5)',
-        'records_path':  'results/rotatedmnist/test_env5/cnn/random/records.json',
-        'preds_dir':     'results/rotatedmnist/test_env5/cnn/random/models',
-        'test_env_idx':  5,
-        'n_envs':        6,
-        'dtype':         'rotatedmnist',
-        'data_dir':      './data',
-        'class_names':   [str(d) for d in range(10)],
-    },
-    {
-        'name':          'PACS ResNet50 (env0)',
-        'records_path':  'results/pacs/test_env0/resnet50/random/records.json',
-        'preds_dir':     'results/pacs/test_env0/resnet50/random/models',
-        'test_env_idx':  0,
-        'n_envs':        4,
-        'dtype':         'pacs',
-        'data_dir':      None,   # set via --pacs_data_dir
-        'class_names':   ['dog','elephant','giraffe','guitar','horse','house','person'],
-    },
-    {
-        'name':          'PACS ResNet50 (env1)',
-        'records_path':  'results/pacs/test_env1/resnet50/random/records.json',
-        'preds_dir':     'results/pacs/test_env1/resnet50/random/models',
-        'test_env_idx':  1,
-        'n_envs':        4,
-        'dtype':         'pacs',
-        'data_dir':      None,
-        'class_names':   ['dog','elephant','giraffe','guitar','horse','house','person'],
-    },
-]
-
-N_HPARAMS = 20
-N_TRIALS  = 3
-
-# ---------------------------------------------------------------------------
-# Ground-truth label reconstruction
-# ---------------------------------------------------------------------------
-
-def get_test_labels(cfg):
-    """
-    Reconstruct ground-truth labels for the test env's out_split (20% holdout,
-    seed=0), exactly as done during training. Returns numpy array of shape (N,).
-    """
-    dtype   = cfg['dtype']
-    test_env = cfg['test_env_idx']
-    data_dir = cfg['data_dir']
-
-    if dtype == 'coloredmnist':
-        import torch
-        from torchvision.datasets import MNIST
-
-        def _bernoulli(p, size):
-            return (torch.rand(size) < p).float()
-        def _xor(a, b):
-            return (a - b).abs()
-
-        mnist_train = MNIST(data_dir, train=True,  download=True)
-        mnist_test  = MNIST(data_dir, train=False, download=True)
-        images_raw  = torch.cat([mnist_train.data, mnist_test.data]).float()
-        labels_raw  = torch.cat([mnist_train.targets, mnist_test.targets])
-
-        rng  = torch.Generator(); rng.manual_seed(0)
-        perm = torch.randperm(len(images_raw), generator=rng)
-        labels_raw = labels_raw[perm]
-
-        # env2 = indices 2, 5, 8, ... of permuted data
-        environments = [0.1, 0.2, 0.9]
-        env_labels_raw = labels_raw[test_env::len(environments)]
-
-        # Replicate _color_dataset label transformation (binary)
-        torch.manual_seed(0)   # fix seed so bernoulli matches training
-        bin_labels = (env_labels_raw < 5).float()
-        bin_labels = _xor(bin_labels, _bernoulli(0.25, len(bin_labels)))
-        bin_labels = bin_labels.long()
-
-        # Replicate split_env (seed=0)
-        n   = len(bin_labels)
-        rng2 = np.random.RandomState(0)
-        perm2 = rng2.permutation(n)
-        n_val = int(n * 0.2)
-        val_idx = perm2[:n_val]
-        return bin_labels[val_idx].numpy()
-
-    elif dtype == 'rotatedmnist':
-        from domainbed.datasets import RotatedMNIST as DB_RotatedMNIST
-
-        db  = DB_RotatedMNIST(data_dir, test_envs=[test_env], hparams={})
-        env = db.datasets[test_env]  # torch Subset
-
-        # Collect all labels in this env
-        all_labels = np.array([int(env[i][1]) for i in range(len(env))])
-
-        # Replicate split_env_subset (seed=0)
-        n   = len(all_labels)
-        rng = np.random.RandomState(0)
-        perm = rng.permutation(n)
-        n_val = int(n * 0.2)
-        val_idx = perm[:n_val]
-        return all_labels[val_idx]
-
-    elif dtype == 'pacs':
-        import os
-        from torchvision.datasets import ImageFolder
-        from torchvision import transforms
-
-        env_dirs = sorted([f.name for f in os.scandir(data_dir) if f.is_dir()])
-        env_path = os.path.join(data_dir, env_dirs[test_env])
-        dataset  = ImageFolder(env_path, transform=transforms.ToTensor())
-        all_labels = np.array(dataset.targets)
-
-        n   = len(all_labels)
-        rng = np.random.RandomState(0)
-        perm = rng.permutation(n)
-        n_val = int(n * 0.2)
-        val_idx = perm[:n_val]
-        return all_labels[val_idx]
-
-    else:
-        raise ValueError(f"Unknown dtype: {dtype}")
-
-# ---------------------------------------------------------------------------
-# Probs loading
-# ---------------------------------------------------------------------------
-
-def load_probs(preds_dir, algo, hpseed, trial, env_idx):
-    fname = f"{algo}_hpseed{hpseed}_trial{trial}_env{env_idx}_probs.npy"
-    path  = os.path.join(preds_dir, fname)
-    return np.load(path).astype(np.float32) if os.path.exists(path) else None
+from utils import CONFIGS, N_HPARAMS, N_TRIALS, get_test_labels, load_probs
 
 # ---------------------------------------------------------------------------
 # Per-class metric computation
@@ -343,6 +201,9 @@ def main():
             true_labels = get_test_labels(cfg)
         except Exception as e:
             print(f"  [ERROR] Could not reconstruct labels: {e}")
+            continue
+        if true_labels is None:
+            print(f"  [skip] {cfg['name']}: per-class labels not available for dtype={cfg['dtype']!r}")
             continue
 
         n_classes   = len(cfg['class_names'])

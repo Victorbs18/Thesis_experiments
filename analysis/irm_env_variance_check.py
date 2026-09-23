@@ -36,41 +36,14 @@ Usage:
         --dataset_name RotatedMNIST --n_hparams 20 --chance_level 0.1
 """
 
+import os
+import sys
 import json
 import argparse
 import numpy as np
 
-
-def get_record_info(records, algo, seed, test_env_idx, n_envs):
-    matching = [r for r in records
-                if r['algorithm'] == algo
-                and r['args']['hparams_seed'] == seed]
-    if not matching:
-        return None
-
-    train_accs = []
-    for env_idx in range(n_envs):
-        if env_idx == test_env_idx:
-            continue
-        key = f'env{env_idx}_out_acc'
-        vals = [r[key] for r in matching if key in r]
-        if vals:
-            train_accs.append(float(np.mean(vals)))
-
-    ood_accs = [r[f'env{test_env_idx}_out_acc'] for r in matching
-                if f'env{test_env_idx}_out_acc' in r]
-    ood_acc = float(np.mean(ood_accs)) if ood_accs else None
-
-    hp = matching[0]['hparams']
-    lam = hp.get('irm_lambda', hp.get('mmd_gamma', None))
-
-    return {
-        'train_accs': train_accs,
-        'train_acc_mean': float(np.mean(train_accs)) if train_accs else None,
-        'train_acc_std': float(np.std(train_accs)) if len(train_accs) > 1 else None,
-        'ood_acc': ood_acc,
-        'lambda': lam,
-    }
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils import get_record_info
 
 
 def main():

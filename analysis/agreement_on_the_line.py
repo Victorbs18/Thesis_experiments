@@ -22,32 +22,13 @@ Usage:
 
 import json
 import os
+import sys
 import argparse
 import numpy as np
-from scipy.special import ndtri as probit
-from scipy.stats import pearsonr, linregress
 from itertools import combinations
 
-
-# Agreement computation
-
-def load_predictions(preds_dir, algorithm, hparams_seed, trial_seed, env_idx):
-    """Load saved prediction vector for one model and environment."""
-    fname = (
-        f"{algorithm}"
-        f"_hpseed{hparams_seed}"
-        f"_trial{trial_seed}"
-        f"_env{env_idx}_preds.npy"
-    )
-    path = os.path.join(preds_dir, fname)
-    if not os.path.exists(path):
-        return None
-    return np.load(path)
-
-
-def compute_agreement(preds_i, preds_j):
-    """Fraction of examples where two models predict the same class."""
-    return float(np.mean(preds_i == preds_j))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils import load_predictions, compute_agreement, get_all_trials, fit_line
 
 
 def get_hp_mean_predictions(preds_dir, algorithm, hparams_seed,
@@ -56,16 +37,16 @@ def get_hp_mean_predictions(preds_dir, algorithm, hparams_seed,
     Load predictions for all trials of a HP config.
     Returns list of prediction arrays, one per trial.
     """
-    preds = []
-    for trial in range(n_trials):
-        p = load_predictions(preds_dir, algorithm, hparams_seed,
-                             trial, test_env_idx)
-        if p is not None:
-            preds.append(p)
-    return preds
+    return get_all_trials(preds_dir, algorithm, hparams_seed,
+                          n_trials, test_env_idx, load_predictions)
 
 
 # ID agreement: average agreement on training env val splits
+#
+# NOTE: this deliberately does NOT use utils.get_id_agr — that function
+# pairs trials by matching index (trial_i == trial_j) only, whereas this
+# averages over the full trial_i x trial_j cross product below. The two
+# are different aggregations, not interchangeable.
 
 def compute_id_agreement(preds_dir, algorithm, seed_i, seed_j,
                           n_trials, test_env_idx, n_envs):
@@ -165,31 +146,22 @@ def compute_agreement_on_line(
             print(f"  {algo}: not enough pairs ({len(id_agrs)})")
             continue
 
-        id_agrs  = np.array(id_agrs)
-        ood_agrs = np.array(ood_agrs)
-
-        # Probit transform
-        eps = 1e-6
-        id_probit  = probit(np.clip(id_agrs,  eps, 1 - eps))
-        ood_probit = probit(np.clip(ood_agrs, eps, 1 - eps))
-
-        R, p_value = pearsonr(id_probit, ood_probit)
-        reg        = linregress(id_probit, ood_probit)
-
+        line = fit_line(id_agrs, ood_agrs)
         results[algo] = {
-            'R':          float(R),
-            'slope':      float(reg.slope),
-            'intercept':  float(reg.intercept),
-            'p_value':    float(p_value),
-            'std_error':  float(reg.stderr),
-            'id_agrs':    id_agrs.tolist(),
-            'ood_agrs':   ood_agrs.tolist(),
-            'n_pairs':    len(id_agrs),
+            'R':          line['R'],
+            'slope':      line['slope'],
+            'intercept':  line['intercept'],
+            'p_value':    line['p_value'],
+            'std_error':  line['std_error'],
+            'id_agrs':    line['id_agrs'],
+            'ood_agrs':   line['ood_agrs'],
+            'n_pairs':    line['n_pairs'],
         }
 
+        R = line['R']
         label = '✓ well-specified' if R < 0.3 else '✗ misspecified'
-        print(f"  {algo:<12} R={R:+.3f}  slope={reg.slope:.3f}  "
-              f"p={p_value:.2e}  n_pairs={len(id_agrs)}  {label}")
+        print(f"  {algo:<12} R={R:+.3f}  slope={line['slope']:.3f}  "
+              f"p={line['p_value']:.2e}  n_pairs={line['n_pairs']}  {label}")
 
     return results
 

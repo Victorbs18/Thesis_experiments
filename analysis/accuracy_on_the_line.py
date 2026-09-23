@@ -23,35 +23,19 @@ Usage:
         --plot_path acl_pacs_clip.png
 """
 
+import os
+import sys
 import json
 import numpy as np
 import argparse
 from scipy.special import ndtri as probit
-from scipy.stats import pearsonr, linregress
 from collections import defaultdict
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-
-def compute_id_acc(record, test_env_idx, n_envs):
-    """
-    ID accuracy = mean out_acc across training environments.
-    This is the IID selection signal.
-    """
-    train_accs = [
-        record[f'env{i}_out_acc']
-        for i in range(n_envs)
-        if i != test_env_idx
-    ]
-    return np.mean(train_accs)
-
-
-def compute_ood_acc(record, test_env_idx):
-    """
-    OOD accuracy = out_acc on test environment.
-    """
-    return record[f'env{test_env_idx}_out_acc']
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils import compute_id_acc, compute_ood_acc, fit_line
 
 
 def compute_rvalue(
@@ -112,43 +96,29 @@ def compute_rvalue(
             id_accs.append(id_mean)
             ood_accs.append(ood_mean)
 
-        id_accs  = np.array(id_accs)
-        ood_accs = np.array(ood_accs)
-
-        # Clip to avoid probit(0) or probit(1) = ±inf
-        eps = 1e-6
-        id_accs_clipped  = np.clip(id_accs,  eps, 1 - eps)
-        ood_accs_clipped = np.clip(ood_accs, eps, 1 - eps)
-
-        # Probit transform: matches Salaudeen et al.
-        id_probit  = probit(id_accs_clipped)
-        ood_probit = probit(ood_accs_clipped)
-
-        # Pearson R
-        R, p_value = pearsonr(id_probit, ood_probit)
-
-        # Linear regression: OOD ~ slope * ID + intercept
-        reg = linregress(id_probit, ood_probit)
+        # fit_line probit-transforms internally (matches Salaudeen et al.)
+        line = fit_line(id_accs, ood_accs)
 
         results[algo] = {
-            'R':          float(R),
-            'slope':      float(reg.slope),
-            'intercept':  float(reg.intercept),
-            'p_value':    float(p_value),
-            'std_error':  float(reg.stderr),
+            'R':          line['R'],
+            'slope':      line['slope'],
+            'intercept':  line['intercept'],
+            'p_value':    line['p_value'],
+            'std_error':  line['std_error'],
             'hp_seeds':   hp_seeds,
-            'id_accs':    id_accs.tolist(),
-            'ood_accs':   ood_accs.tolist(),
-            'id_probit':  id_probit.tolist(),
-            'ood_probit': ood_probit.tolist(),
-            'n_points':   len(id_accs),
+            'id_accs':    line['id_agrs'],
+            'ood_accs':   line['ood_agrs'],
+            'id_probit':  line['id_probit'],
+            'ood_probit': line['ood_probit'],
+            'n_points':   line['n_pairs'],
         }
 
         if verbose:
+            R = line['R']
             label = '✓ well-specified' if R < 0.3 else '✗ misspecified'
-            print(f"  {algo:<12} R={R:+.3f}  slope={reg.slope:.3f}  "
-                  f"intercept={reg.intercept:.3f}  "
-                  f"p={p_value:.2e}  se={reg.stderr:.3f}  {label}")
+            print(f"  {algo:<12} R={R:+.3f}  slope={line['slope']:.3f}  "
+                  f"intercept={line['intercept']:.3f}  "
+                  f"p={line['p_value']:.2e}  se={line['std_error']:.3f}  {label}")
 
     return results
 

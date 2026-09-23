@@ -6,8 +6,12 @@ Used to find label-free signals that correlate with IRM performance.
 
 import json
 import os
+import sys
 import numpy as np
 from scipy.stats import pearsonr
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils import load_probs, load_preds, compute_entropy, compute_agreement
 
 # Paths
 records_path = 'results/coloredmnist/test_env2/cnn/random/records.json'
@@ -35,30 +39,20 @@ for seed in range(20):
     preds_irm_list = []
 
     for t in range(3):
-        pe = np.load(os.path.join(preds_dir,
-             f'ERM_hpseed{seed}_trial{t}_env{test_env_idx}_probs.npy'))
-        pi = np.load(os.path.join(preds_dir,
-             f'IRM_hpseed{seed}_trial{t}_env{test_env_idx}_probs.npy'))
-        de = np.load(os.path.join(preds_dir,
-             f'ERM_hpseed{seed}_trial{t}_env{test_env_idx}_preds.npy'))
-        di = np.load(os.path.join(preds_dir,
-             f'IRM_hpseed{seed}_trial{t}_env{test_env_idx}_preds.npy'))
+        pe = load_probs(preds_dir, 'ERM', seed, t, test_env_idx)
+        pi = load_probs(preds_dir, 'IRM', seed, t, test_env_idx)
+        de = load_preds(preds_dir, 'ERM', seed, t, test_env_idx)
+        di = load_preds(preds_dir, 'IRM', seed, t, test_env_idx)
         probs_erm_list.append(pe)
         probs_irm_list.append(pi)
         preds_erm_list.append(de)
         preds_irm_list.append(di)
 
-    h_erm = float(np.mean([
-        -np.sum(p * np.log(p + 1e-8), axis=1).mean()
-        for p in probs_erm_list
-    ]))
-    h_irm = float(np.mean([
-        -np.sum(p * np.log(p + 1e-8), axis=1).mean()
-        for p in probs_irm_list
-    ]))
+    h_erm = float(np.mean([compute_entropy(p) for p in probs_erm_list]))
+    h_irm = float(np.mean([compute_entropy(p) for p in probs_irm_list]))
 
     ood_agr = float(np.mean([
-        np.mean(de == di)
+        compute_agreement(de, di)
         for de in preds_erm_list
         for di in preds_irm_list
     ]))

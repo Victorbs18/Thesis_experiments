@@ -8,23 +8,13 @@ a single R value per algorithm.
 Usage:
     python pooled_acl.py
 """
+import os
+import sys
 import json
 import numpy as np
-from scipy.special import ndtri as probit
-from scipy.stats import pearsonr, linregress
 
-
-def compute_id_acc(record, test_env_idx, n_envs):
-    train_accs = [
-        record[f'env{i}_out_acc']
-        for i in range(n_envs)
-        if i != test_env_idx
-    ]
-    return np.mean(train_accs)
-
-
-def compute_ood_acc(record, test_env_idx):
-    return record[f'env{test_env_idx}_out_acc']
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils import compute_id_acc, compute_ood_acc, fit_line
 
 
 def load_points(records_path, test_env_idx, n_envs, algo, backbone_label):
@@ -55,20 +45,16 @@ def load_points(records_path, test_env_idx, n_envs, algo, backbone_label):
 
 
 def compute_acl(points, label):
-    id_accs  = np.array([p['id_acc'] for p in points])
-    ood_accs = np.array([p['ood_acc'] for p in points])
+    id_accs  = [p['id_acc'] for p in points]
+    ood_accs = [p['ood_acc'] for p in points]
 
-    eps = 1e-6
-    id_p  = probit(np.clip(id_accs, eps, 1 - eps))
-    ood_p = probit(np.clip(ood_accs, eps, 1 - eps))
-
-    R, pval = pearsonr(id_p, ood_p)
-    reg = linregress(id_p, ood_p)
+    line = fit_line(id_accs, ood_accs)
+    R, pval = line['R'], line['p_value']
 
     flag = '✓ well-specified' if R < 0.3 else '✗ misspecified'
     print(f"{label:<30} n={len(points):3d}  R={R:+.3f}  "
-          f"slope={reg.slope:.3f}  intercept={reg.intercept:.3f}  "
-          f"p={pval:.2e}  se={reg.stderr:.3f}  {flag}")
+          f"slope={line['slope']:.3f}  intercept={line['intercept']:.3f}  "
+          f"p={pval:.2e}  se={line['std_error']:.3f}  {flag}")
     return R, pval
 
 

@@ -171,13 +171,14 @@ def _color_dataset(images, labels, environment):
     return {'images': x, 'labels': y}
 
 
-def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
-                      backbone='cnn'):
+def _build_colored_mnist_envs(data_dir):
     """
-    Build ColoredMNIST exactly as DomainBed does.
-    3 environments: e=0.1 (+90%), e=0.2 (+80%), e=0.9 (-90%)
-    Returns list of (in_env, out_env) tuples.
-    backbone argument accepted but ignored (always uses CNN).
+    Generate the 3 ColoredMNIST environments (shared base data, before
+    train/val splitting). Call this ONCE and reuse the result across
+    multiple splits — _color_dataset's label-noise/color assignment uses
+    PyTorch's global RNG (a known, pre-existing non-determinism), so calling
+    this repeatedly would produce a different synthetic realization each
+    time, not just a different train/val partition of the same data.
     """
     mnist_train = MNIST(data_dir, train=True,  download=True)
     mnist_test  = MNIST(data_dir, train=False, download=True)
@@ -197,6 +198,18 @@ def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
                        labels[i::len(environments)], e)
         for i, e in enumerate(environments)
     ]
+    return envs, environments
+
+
+def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
+                      backbone='cnn'):
+    """
+    Build ColoredMNIST exactly as DomainBed does.
+    3 environments: e=0.1 (+90%), e=0.2 (+80%), e=0.9 (-90%)
+    Returns list of (in_env, out_env) tuples.
+    backbone argument accepted but ignored (always uses CNN).
+    """
+    envs, environments = _build_colored_mnist_envs(data_dir)
 
     print(f"ColoredMNIST loaded:")
     for i, (e, env) in enumerate(zip(environments, envs)):
@@ -205,6 +218,29 @@ def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
 
     envs_splits = [split_env(env, holdout_frac, seed) for env in envs]
     return envs_splits
+
+
+def get_colored_mnist_per_trial(data_dir='./data', n_trials=3,
+                                holdout_frac=0.2, backbone='cnn'):
+    """
+    Same ColoredMNIST base data as get_colored_mnist, generated ONCE, split
+    n_trials different ways (seed=0..n_trials-1) — one train/val partition
+    per trial, shared across every algorithm/hparams_seed that uses that
+    trial index (so predictions stay comparable trial-to-trial across
+    algorithms — required for Cross-R/CrA's trial-matched agreement).
+    Returns {trial_seed: envs_splits}.
+    """
+    envs, environments = _build_colored_mnist_envs(data_dir)
+
+    print(f"ColoredMNIST loaded (per-trial split, {n_trials} trials):")
+    for i, (e, env) in enumerate(zip(environments, envs)):
+        marker = ': test' if i == 2 else ''
+        print(f"  env{i} (e={e}): {len(env['images'])} samples{marker}")
+
+    return {
+        t: [split_env(env, holdout_frac, seed=t) for env in envs]
+        for t in range(n_trials)
+    }
 
 
 # PACS
@@ -269,6 +305,59 @@ def get_wildscamelyon(data_dir='./data', test_env_idx=2,
     return envs_splits
 
 
+# ACSIncome
+
+ACS_STATES = ['CA', 'TX', 'NY', 'FL', 'PA', 'IL', 'OH', 'GA', 'NC', 'MI']
+
+
+def get_acs_income(data_dir='./data', test_env_idx=9,
+                    holdout_frac=0.2, seed=0, backbone=None):
+    """
+    Load ACS Income via folktables. Each US state is one environment;
+    task is binary classification of income >= 50k. Geographic covariate
+    shift across states.
+
+    backbone argument accepted but ignored — tabular data gets DomainBed's
+    built-in MLP featurizer, auto-selected for 1D input_shape.
+
+    Reuses the tensor-env pipeline (same as ColoredMNIST): the 'images' key
+    just holds plain feature vectors here, not images.
+    Returns list of (in_env, out_env) tuples.
+    """
+    from folktables import ACSDataSource, ACSIncome
+    from sklearn.preprocessing import StandardScaler
+
+    data_source = ACSDataSource(survey_year='2018', horizon='1-Year',
+                                survey='person', root_dir=data_dir)
+
+    print(f"ACSIncome loaded (test env: {ACS_STATES[test_env_idx]}):")
+    X_raw, y_raw = [], []
+    for state in ACS_STATES:
+        data    = data_source.get_data(states=[state], download=True)
+        X, y, _ = ACSIncome.df_to_numpy(data)
+        X_raw.append(X.astype(np.float32))
+        y_raw.append(y.astype(np.int64))
+
+    # fit scaler on training environments only — avoids test-env leakage
+    train_idx = [i for i in range(len(ACS_STATES)) if i != test_env_idx]
+    scaler = StandardScaler()
+    scaler.fit(np.vstack([X_raw[i] for i in train_idx]))
+
+    envs_splits = []
+    for i, state in enumerate(ACS_STATES):
+        marker   = ' : test' if i == test_env_idx else ''
+        X_scaled = scaler.transform(X_raw[i])
+        print(f"  env{i} ({state}): {len(X_scaled)} samples{marker}")
+        env = {
+            'images': torch.tensor(X_scaled, dtype=torch.float32),
+            'labels': torch.tensor(y_raw[i], dtype=torch.long),
+        }
+        in_env, out_env = split_env(env, holdout_frac, seed)
+        envs_splits.append((in_env, out_env))
+
+    return envs_splits
+
+
 # Dataset registry
 
 DATASET_CONFIGS = {
@@ -318,19 +407,40 @@ DATASET_CONFIGS = {
         'selection_methods': ['IIDAccuracySelectionMethod',
                               'OracleSelectionMethod'],
     },
+    'ACSIncome': {
+        'loader':            get_acs_income,
+        'n_envs':            10,
+        'test_env_idx':      9,
+        'n_steps':           5001,
+        'env_names':         ACS_STATES,
+        'input_shape':       (10,),
+        'n_classes':         2,
+        'selection_methods': ['IIDAccuracySelectionMethod',
+                              'OracleSelectionMethod'],
+    },
 }
 
 
 def get_dataset(dataset_name, data_dir, test_env_idx=None,
-                holdout_frac=0.2, seed=0, backbone='resnet50'):
+                holdout_frac=0.2, seed=0, backbone='resnet50',
+                split_mode='single', n_trials=None):
     """
     Single entry point for all datasets.
+
+    split_mode='single' (default): one fixed 80/20 split (seed), reused
+      across all trials — identical to every prior invocation.
+    split_mode='per_trial': one DIFFERENT split per trial (seed=0..n_trials-1),
+      shared across every algorithm/hparams_seed for that trial. Returns
+      {trial_seed: envs_splits} instead of a single envs_splits list.
+      Currently only implemented for ColoredMNIST.
 
     Usage:
         envs_splits = get_dataset('ColoredMNIST', data_dir='./data')
         envs_splits = get_dataset('PACS', data_dir='./data', test_env_idx=0)
         envs_splits = get_dataset('PACS', data_dir='./data',
                                   test_env_idx=0, backbone='clip')
+        per_trial   = get_dataset('ColoredMNIST', data_dir='./data',
+                                  split_mode='per_trial', n_trials=3)
     """
     if dataset_name not in DATASET_CONFIGS:
         raise ValueError(
@@ -341,6 +451,17 @@ def get_dataset(dataset_name, data_dir, test_env_idx=None,
 
     if test_env_idx is None:
         test_env_idx = cfg['test_env_idx']
+
+    if split_mode == 'per_trial':
+        if dataset_name != 'ColoredMNIST':
+            raise NotImplementedError(
+                f"split_mode='per_trial' is currently only implemented for "
+                f"ColoredMNIST (got '{dataset_name}')."
+            )
+        if n_trials is None:
+            raise ValueError("n_trials is required when split_mode='per_trial'")
+        return get_colored_mnist_per_trial(data_dir, n_trials, holdout_frac,
+                                           backbone)
 
     if dataset_name == 'ColoredMNIST':
         return cfg['loader'](data_dir, holdout_frac, seed, backbone)
