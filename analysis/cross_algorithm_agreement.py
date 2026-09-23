@@ -27,158 +27,90 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import ndtri as probit
 from scipy.special import ndtr as normal_cdf
-from scipy.stats import pearsonr, linregress
+from scipy.stats import pearsonr
 from itertools import combinations
 
+from utils import (
+    load_probs, load_predictions, get_all_trials, get_record_info,
+    compute_agreement, compute_entropy, get_id_agr, get_ood_agr,
+    get_valid_seeds, fit_line,
+)
+from distance_metrics import compute_mmd, compute_wasserstein, compute_pad
+
 
 # ---------------------------------------------------------------------------
-# Loading utilities
+# Input-space shift (dataset-level, model- and seed-independent)
 # ---------------------------------------------------------------------------
 
-def load_predictions(preds_dir, algorithm, hparams_seed, trial_seed, env_idx):
-    fname = (f"{algorithm}_hpseed{hparams_seed}"
-             f"_trial{trial_seed}_env{env_idx}_preds.npy")
-    path = os.path.join(preds_dir, fname)
-    return np.load(path) if os.path.exists(path) else None
+def _flatten_env_split(env, max_n=2000, seed=42):
+    """
+    Extract and flatten one environment's out-split inputs to (N, D) float32.
+    Subsamples BEFORE materializing so image datasets don't load/transform
+    examples that will just be discarded. Handles both tensor envs
+    ({'images': ...}, e.g. ColoredMNIST/ACSIncome) and Dataset/Subset envs
+    (e.g. RotatedMNIST/PACS).
+    """
+    if isinstance(env, dict) and 'images' in env:
+        x = env['images']
+        n = len(x)
+        if n > max_n:
+            idx = np.random.default_rng(seed).choice(n, max_n, replace=False)
+            x = x[idx]
+        return x.reshape(len(x), -1).numpy().astype(np.float32)
+    else:
+        n = len(env)
+        idx = (np.arange(n) if n <= max_n
+               else np.random.default_rng(seed).choice(n, max_n, replace=False))
+        rows = [np.asarray(env[int(i)][0]).reshape(-1) for i in idx]
+        return np.stack(rows).astype(np.float32)
 
 
-def load_probs(preds_dir, algorithm, hparams_seed, trial_seed, env_idx):
-    fname = (f"{algorithm}_hpseed{hparams_seed}"
-             f"_trial{trial_seed}_env{env_idx}_probs.npy")
-    path = os.path.join(preds_dir, fname)
-    return np.load(path) if os.path.exists(path) else None
-
-
-def get_all_trials(preds_dir, algorithm, hparams_seed, n_trials,
-                   env_idx, loader_fn):
-    results = []
-    for trial in range(n_trials):
-        r = loader_fn(preds_dir, algorithm, hparams_seed, trial, env_idx)
-        if r is not None:
-            results.append(r)
-    return results
-
-
-def _subsample(X, max_n=2000, seed=42):
-    rng = np.random.default_rng(seed)
-    if X.shape[0] > max_n:
-        X = X[rng.choice(X.shape[0], max_n, replace=False)]
-    return X
-
-
-def compute_mmd(X, Y):
-    X = _subsample(X)
-    Y = _subsample(Y)
-    XY = np.vstack([X, Y])
-    diff = XY[:, None, :] - XY[None, :, :]
-    sq = (diff ** 2).sum(-1)
-    idx = np.triu_indices(len(XY), k=1)
-    sigma = float(np.median(np.sqrt(sq[idx])))
-    sigma = max(sigma, 1e-6)
-    bandwidths = [sigma / 2, sigma, sigma * 2]
-
-    def rbf(A, B, s):
-        d = A[:, None, :] - B[None, :, :]
-        return np.exp(-(d ** 2).sum(-1) / (2 * s ** 2))
-
-    mmd = 0.0
-    for s in bandwidths:
-        Kxx = rbf(X, X, s).mean()
-        Kyy = rbf(Y, Y, s).mean()
-        Kxy = rbf(X, Y, s).mean()
-        mmd += float(Kxx + Kyy - 2 * Kxy)
-    return max(mmd / len(bandwidths), 0.0)
-
-
-def compute_wasserstein(X, Y, n_iters=100, reg=0.05):
-    X = _subsample(X, max_n=1000)
-    Y = _subsample(Y, max_n=1000)
-    n, m = X.shape[0], Y.shape[0]
-    diff = X[:, None, :] - Y[None, :, :]
-    C = np.sqrt((diff ** 2).sum(-1))
-    log_a = np.full(n, -np.log(n))
-    log_b = np.full(m, -np.log(m))
-    log_K = -C / reg
-    log_u = np.zeros(n)
-    for _ in range(n_iters):
-        log_v = log_b - np.logaddexp.reduce(log_K + log_u[:, None], axis=0)
-        log_u = log_a - np.logaddexp.reduce(log_K + log_v[None, :], axis=1)
-    log_T = log_K + log_u[:, None] + log_v[None, :]
-    T = np.exp(log_T)
-    return float(max((T * C).sum(), 0.0))
-
-
-def compute_pad(X, Y, n_iters=500, lr=1e-3):
-    X = _subsample(X)
-    Y = _subsample(Y)
-    data   = np.vstack([X, Y]).astype(np.float32)
-    labels = np.array([0] * len(X) + [1] * len(Y), dtype=np.int32)
-    rng    = np.random.default_rng(42)
-    perm   = rng.permutation(len(data))
-    data   = data[perm]
-    labels = labels[perm]
-    d = data.shape[1]
-    W = np.zeros((d, 2), dtype=np.float32)
-    b = np.zeros(2, dtype=np.float32)
-
-    def softmax(z):
-        z = z - z.max(axis=1, keepdims=True)
-        e = np.exp(z)
-        return e / e.sum(axis=1, keepdims=True)
-
-    for _ in range(n_iters):
-        logits  = data @ W + b
-        probs   = softmax(logits)
-        one_hot = np.zeros_like(probs)
-        one_hot[np.arange(len(labels)), labels] = 1.0
-        delta = (probs - one_hot) / len(data)
-        W -= lr * (data.T @ delta)
-        b -= lr * delta.sum(axis=0)
-
-    logits = data @ W + b
-    preds  = logits.argmax(axis=1)
-    error  = float((preds != labels).mean())
-    return float(max(0.0, 2.0 * (1.0 - 2.0 * error)))
-
-
-def _pool_id_probs(preds_dir, algo, seed, n_trials, test_env_idx, n_envs):
-    id_probs = []
-    for env_idx in range(n_envs):
-        if env_idx == test_env_idx:
-            continue
-        id_probs.extend(get_all_trials(preds_dir, algo, seed, n_trials,
-                                       env_idx, load_probs))
-    return id_probs
-
-
-def get_record_info(records, algo, seed, test_env_idx):
-    matching = [r for r in records
-                if r['algorithm'] == algo
-                and r['args']['hparams_seed'] == seed]
-    if not matching:
+def compute_input_space_shift(dataset_key, data_dir, test_env_idx, n_envs,
+                               backbone='resnet50', run_mmd=False,
+                               run_wass=False, run_pad=False):
+    """
+    MMD / Wasserstein / PAD between pooled ID envs' raw inputs and the OOD
+    (test) env's raw inputs -- computed directly on the data itself, never
+    touching model predictions. This is a property of the dataset/split,
+    not of any algorithm or seed, so it's computed once per dataset rather
+    than once per (algo, seed) the way the old probability-space "shift"
+    metric was.
+    """
+    if not (run_mmd or run_wass or run_pad):
         return None
-    accs = [r[f'env{test_env_idx}_out_acc'] for r in matching]
-    hp = matching[0]['hparams']
+    if dataset_key is None or data_dir is None:
+        raise ValueError(
+            "--distance_metrics requires --input_dataset and --input_data_dir "
+            "to load the raw inputs for the input-space shift computation."
+        )
+
+    import sys
+    _repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    sys.path.insert(0, _repo_root)
+    sys.path.insert(0, os.path.join(_repo_root, 'DomainBed'))
+    from src.datasets import get_dataset
+
+    envs_splits = get_dataset(dataset_key, data_dir=data_dir,
+                              test_env_idx=test_env_idx, backbone=backbone)
+
+    id_parts = []
+    for i in range(n_envs):
+        if i == test_env_idx:
+            continue
+        _, out_env = envs_splits[i]
+        id_parts.append(_flatten_env_split(out_env))
+    id_pool  = np.vstack(id_parts)
+    _, test_out_env = envs_splits[test_env_idx]
+    ood_pool = _flatten_env_split(test_out_env)
+
     return {
-        'ood_acc':     float(np.mean(accs)),
-        'ood_acc_std': float(np.std(accs)),
-        'lr':          hp.get('lr', 0),
-        'lambda':      hp.get('irm_lambda', hp.get('mmd_gamma', None)),
-        'anneal':      hp.get('irm_penalty_anneal_iters', None),
-        'bs':          hp.get('batch_size', None),
+        'mmd':         compute_mmd(id_pool, ood_pool)         if run_mmd  else None,
+        'wasserstein': compute_wasserstein(id_pool, ood_pool) if run_wass else None,
+        'pad':         compute_pad(id_pool, ood_pool)         if run_pad  else None,
+        'id_n':  len(id_pool),
+        'ood_n': len(ood_pool),
+        'dim':   id_pool.shape[1],
     }
-
-
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
-
-def compute_agreement(preds_i, preds_j):
-    return float(np.mean(preds_i == preds_j))
-
-
-def compute_entropy(probs):
-    return float(-np.sum(probs * np.log(probs + 1e-8), axis=1).mean())
 
 
 def get_entropy_mean_std(preds_dir, algo, seed, n_trials, test_env_idx):
@@ -190,82 +122,9 @@ def get_entropy_mean_std(preds_dir, algo, seed, n_trials, test_env_idx):
     return float(np.mean(per_trial_h)), float(np.std(per_trial_h))
 
 
-def get_id_agr(preds_dir, algo_a, algo_b, seed_a, seed_b,
-               n_trials, test_env_idx, n_envs, return_all=False):
-    per_trial_agrs = []
-    for trial in range(n_trials):
-        env_agrs = []
-        for env_idx in range(n_envs):
-            if env_idx == test_env_idx:
-                continue
-            pa = load_predictions(preds_dir, algo_a, seed_a, trial, env_idx)
-            pb = load_predictions(preds_dir, algo_b, seed_b, trial, env_idx)
-            if pa is not None and pb is not None:
-                env_agrs.append(compute_agreement(pa, pb))
-        if env_agrs:
-            per_trial_agrs.append(float(np.mean(env_agrs)))
-    if not per_trial_agrs:
-        return None
-    return per_trial_agrs if return_all else float(np.mean(per_trial_agrs))
-
-
-def get_ood_agr(preds_dir, algo_a, algo_b, seed_a, seed_b,
-                n_trials, test_env_idx, return_all=False):
-    per_trial_agrs = []
-    for trial in range(n_trials):
-        pa = load_predictions(preds_dir, algo_a, seed_a, trial, test_env_idx)
-        pb = load_predictions(preds_dir, algo_b, seed_b, trial, test_env_idx)
-        if pa is not None and pb is not None:
-            per_trial_agrs.append(compute_agreement(pa, pb))
-    if not per_trial_agrs:
-        return None
-    return per_trial_agrs if return_all else float(np.mean(per_trial_agrs))
-
-
-# ---------------------------------------------------------------------------
-# Entropy-based seed filtering
-# ---------------------------------------------------------------------------
-
-def get_valid_seeds(preds_dir, algorithm, n_hparams, n_trials, test_env_idx,
-                    max_entropy, entropy_threshold=0.9):
-    valid, excluded = [], []
-    for seed in range(n_hparams):
-        probs = get_all_trials(preds_dir, algorithm, seed, n_trials,
-                               test_env_idx, load_probs)
-        if not probs:
-            continue
-        rel_h = float(np.mean([compute_entropy(p) for p in probs])) / max_entropy
-        if rel_h < entropy_threshold:
-            valid.append(seed)
-        else:
-            excluded.append((seed, rel_h))
-    return valid, excluded
-
-
 # ---------------------------------------------------------------------------
 # Agreement lines (probit-space linear fit)
 # ---------------------------------------------------------------------------
-
-def _fit_line(id_agrs, ood_agrs):
-    id_agrs  = np.array(id_agrs)
-    ood_agrs = np.array(ood_agrs)
-    eps = 1e-6
-    id_probit  = probit(np.clip(id_agrs,  eps, 1 - eps))
-    ood_probit = probit(np.clip(ood_agrs, eps, 1 - eps))
-    R, p_value = pearsonr(id_probit, ood_probit)
-    reg = linregress(id_probit, ood_probit)
-    return {
-        'R':          float(R),
-        'slope':      float(reg.slope),
-        'intercept':  float(reg.intercept),
-        'p_value':    float(p_value),
-        'id_agrs':    id_agrs.tolist(),
-        'ood_agrs':   ood_agrs.tolist(),
-        'ood_median': float(np.median(ood_agrs)),
-        'ood_mean':   float(np.mean(ood_agrs)),
-        'n_pairs':    len(id_agrs),
-    }
-
 
 def compute_erm_line(preds_dir, valid_seeds, n_trials, test_env_idx, n_envs):
     id_agrs, ood_agrs = [], []
@@ -277,7 +136,7 @@ def compute_erm_line(preds_dir, valid_seeds, n_trials, test_env_idx, n_envs):
         if id_agr is not None and ood_agr is not None:
             id_agrs.append(id_agr)
             ood_agrs.append(ood_agr)
-    line = _fit_line(id_agrs, ood_agrs)
+    line = fit_line(id_agrs, ood_agrs)
     line['n_seeds'] = len(valid_seeds)
     return line
 
@@ -301,7 +160,7 @@ def compute_cross_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
                 ood_agrs.append(ood_agr)
     if len(id_agrs) < 2:
         return None
-    return _fit_line(id_agrs, ood_agrs)
+    return fit_line(id_agrs, ood_agrs)
 
 
 def compute_seed_level_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
@@ -314,7 +173,7 @@ def compute_seed_level_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
         y_j = mean OOD agreement of seed j with ALL ERM seeds in valid_a
 
     This gives len(valid_b) points instead of len(valid_a)*len(valid_b) pairs.
-    Fit in probit space -- same as _fit_line() -- so R is directly comparable
+    Fit in probit space -- same as fit_line() -- so R is directly comparable
     to Cross-R.
 
     Interpretation:
@@ -357,7 +216,7 @@ def compute_seed_level_line(preds_dir, valid_a, valid_b, algo_a, algo_b,
     if len(x_per_seed) < 2:
         return None
 
-    line = _fit_line(x_per_seed, y_per_seed)
+    line = fit_line(x_per_seed, y_per_seed)
     line['seed_ids']   = seed_ids
     line['x_per_seed'] = x_per_seed
     line['y_per_seed'] = y_per_seed
@@ -399,6 +258,10 @@ def compute_cross_algorithm_agreement(
     disagreement_rate_threshold=0.5,
     distance_metrics=None,
     irm_anneal_threshold=None,
+    input_dataset=None,
+    input_data_dir=None,
+    input_backbone='resnet50',
+    precomputed_input_shift=None,
 ):
     with open(records_path) as f:
         records = json.load(f)
@@ -427,6 +290,28 @@ def compute_cross_algorithm_agreement(
         print(f"  distance metrics: {', '.join(distance_metrics)}")
     else:
         print(f"  distance metrics: OFF")
+
+    # Input-space shift: dataset-level, computed once (not per seed/algo) --
+    # see compute_input_space_shift's docstring for why this replaced the
+    # old per-seed probability-space "shift" metric.
+    input_shift = None
+    if run_any:
+        # Dataset-level and identical for every algo_b, so callers that loop
+        # over multiple algo_b values in one run should compute this once
+        # and pass it in via precomputed_input_shift instead of reloading
+        # the raw dataset on every call.
+        input_shift = precomputed_input_shift or compute_input_space_shift(
+            input_dataset, input_data_dir, test_env_idx, n_envs,
+            backbone=input_backbone,
+            run_mmd=run_mmd, run_wass=run_wass, run_pad=run_pad)
+        print(f"  input-space shift (ID pool vs OOD, n_id={input_shift['id_n']} "
+              f"n_ood={input_shift['ood_n']} dim={input_shift['dim']}):")
+        if run_mmd:
+            print(f"    mmd_shift         = {input_shift['mmd']:.5f}")
+        if run_wass:
+            print(f"    wasserstein_shift = {input_shift['wasserstein']:.5f}")
+        if run_pad:
+            print(f"    pad_shift         = {input_shift['pad']:.5f}")
 
     # ---- Step 0: symmetric entropy filter ----
     valid_a, excluded_a = get_valid_seeds(preds_dir, algo_a, n_hparams, n_trials,
@@ -515,11 +400,11 @@ def compute_cross_algorithm_agreement(
                    f"{'H('+algo_a+')':>14} | {'H('+algo_b+')':>14}")
     dist_header = ""
     if run_mmd:
-        dist_header += f" | {'mmd_x':>7} | {'mmd_s':>7}"
+        dist_header += f" | {'mmd_x':>7}"
     if run_wass:
-        dist_header += f" | {'wss_x':>7} | {'wss_s':>7}"
+        dist_header += f" | {'wss_x':>7}"
     if run_pad:
-        dist_header += f" | {'pad_x':>7} | {'pad_s':>7}"
+        dist_header += f" | {'pad_x':>7}"
     print(base_header + dist_header + f" | {'lambda':>10} | {'anneal':>6} | status")
     print(f"  {'-'*180}")
 
@@ -529,9 +414,7 @@ def compute_cross_algorithm_agreement(
     rel_dhs, rel_h_bs = [], []
     entropies_a, entropies_b = [], []
     entropies_a_std, entropies_b_std = [], []
-    mmd_crosses, mmd_shifts = [], []
-    wass_crosses, wass_shifts = [], []
-    pad_crosses, pad_shifts = [], []
+    mmd_crosses, wass_crosses, pad_crosses = [], [], []
     seeds_used, step2_statuses = [], []
     acc_bs_all = []
     eps = 1e-6
@@ -562,14 +445,12 @@ def compute_cross_algorithm_agreement(
         rel_dH  = ((entropy_b - entropy_a) / max_entropy
                    if entropy_b is not None and entropy_a is not None else None)
 
-        mmd_c = mmd_s = wass_c = wass_s = pad_c = pad_s = None
+        mmd_c = wass_c = pad_c = None
         if run_any:
             probs_a_dist = get_all_trials(preds_dir, algo_a, seed, n_trials,
                                           test_env_idx, load_probs)
             probs_b_dist = get_all_trials(preds_dir, algo_b, seed, n_trials,
                                           test_env_idx, load_probs)
-            id_probs_b   = _pool_id_probs(preds_dir, algo_b, seed, n_trials,
-                                          test_env_idx, n_envs)
             if probs_a_dist and probs_b_dist:
                 cross_pairs = [(pa, pb) for pa in probs_a_dist for pb in probs_b_dist]
                 if run_mmd:
@@ -578,12 +459,6 @@ def compute_cross_algorithm_agreement(
                     wass_c = float(np.mean([compute_wasserstein(pa, pb) for pa, pb in cross_pairs]))
                 if run_pad:
                     pad_c = float(np.mean([compute_pad(pa, pb) for pa, pb in cross_pairs]))
-            if id_probs_b and probs_b_dist:
-                id_pool  = np.vstack(id_probs_b)
-                ood_pool = np.vstack(probs_b_dist)
-                if run_mmd:   mmd_s  = compute_mmd(id_pool, ood_pool)
-                if run_wass:  wass_s = compute_wasserstein(id_pool, ood_pool)
-                if run_pad:   pad_s  = compute_pad(id_pool, ood_pool)
 
         step2 = 'candidate' if ood_agr < erm_ood_median else 'on line'
 
@@ -604,9 +479,9 @@ def compute_cross_algorithm_agreement(
         rel_dhs.append(rel_dH);   rel_h_bs.append(rel_h_b)
         entropies_a.append(entropy_a);      entropies_b.append(entropy_b)
         entropies_a_std.append(entropy_a_std); entropies_b_std.append(entropy_b_std)
-        mmd_crosses.append(mmd_c);  mmd_shifts.append(mmd_s)
-        wass_crosses.append(wass_c); wass_shifts.append(wass_s)
-        pad_crosses.append(pad_c);   pad_shifts.append(pad_s)
+        mmd_crosses.append(mmd_c)
+        wass_crosses.append(wass_c)
+        pad_crosses.append(pad_c)
         seeds_used.append(seed);    step2_statuses.append(step2)
         acc_bs_all.append(acc_b)
 
@@ -623,9 +498,9 @@ def compute_cross_algorithm_agreement(
                 f"{_ms(acc_a, acc_a_std)} | {_ms(acc_b, acc_b_std)} | "
                 f"{_ms(entropy_a, entropy_a_std, p=4)} | {_ms(entropy_b, entropy_b_std, p=4)}")
         dist_cols = ""
-        if run_mmd:   dist_cols += f" | {_f(mmd_c)} | {_f(mmd_s)}"
-        if run_wass:  dist_cols += f" | {_f(wass_c)} | {_f(wass_s)}"
-        if run_pad:   dist_cols += f" | {_f(pad_c)} | {_f(pad_s)}"
+        if run_mmd:   dist_cols += f" | {_f(mmd_c)}"
+        if run_wass:  dist_cols += f" | {_f(wass_c)}"
+        if run_pad:   dist_cols += f" | {_f(pad_c)}"
         print(base + dist_cols + f" | {lambda_str} | {anneal_str} | {step2}")
 
     # ---- Step 3 ----
@@ -662,20 +537,17 @@ def compute_cross_algorithm_agreement(
     if run_any:
         print(f"\n  Distance metrics summary:")
         names_and_lists = []
-        if run_mmd:   names_and_lists.append(('mmd',         mmd_crosses,  mmd_shifts))
-        if run_wass:  names_and_lists.append(('wasserstein', wass_crosses, wass_shifts))
-        if run_pad:   names_and_lists.append(('pad',         pad_crosses,  pad_shifts))
-        for name, cv_raw, sv_raw in names_and_lists:
+        if run_mmd:   names_and_lists.append(('mmd',         mmd_crosses))
+        if run_wass:  names_and_lists.append(('wasserstein', wass_crosses))
+        if run_pad:   names_and_lists.append(('pad',         pad_crosses))
+        for name, cv_raw in names_and_lists:
             cp = [(v, a) for v, a in zip(cv_raw, acc_bs_all) if v is not None and a is not None]
-            sp = [(v, a) for v, a in zip(sv_raw, acc_bs_all) if v is not None and a is not None]
             if cp:
                 cv = [v for v, _ in cp]; ca = [a for _, a in cp]
                 r_c = pearsonr(cv, ca)[0] if len(cv) >= 3 else float('nan')
                 print(f"  {name}_cross: mean={np.mean(cv):.5f}  r(acc)={r_c:+.3f}")
-            if sp:
-                sv = [v for v, _ in sp]; sa = [a for _, a in sp]
-                r_s = pearsonr(sv, sa)[0] if len(sv) >= 3 else float('nan')
-                print(f"  {name}_shift: mean={np.mean(sv):.5f}  r(acc)={r_s:+.3f}")
+        # input-space shift is a single dataset-level number (see above),
+        # not a per-seed series, so no r(acc) correlation applies to it
 
     return {
         'erm_line':                erm_line,
@@ -696,11 +568,9 @@ def compute_cross_algorithm_agreement(
         'entropies_b':             entropies_b,
         'entropies_b_std':         entropies_b_std,
         'mmd_crosses':             mmd_crosses,
-        'mmd_shifts':              mmd_shifts,
         'wass_crosses':            wass_crosses,
-        'wass_shifts':             wass_shifts,
         'pad_crosses':             pad_crosses,
-        'pad_shifts':              pad_shifts,
+        'input_shift':             input_shift,
         'seeds_used':              seeds_used,
         'step2_statuses':          step2_statuses,
         'candidate_seeds':         candidate_seeds,
@@ -857,7 +727,6 @@ def compare_selection_strategies(results_list, records_path, test_env_idx, algo_
         rel_dhs            = res['rel_dhs']
         deviations         = res['deviations']
         mmd_crosses        = res['mmd_crosses']
-        mmd_shifts         = res['mmd_shifts']
         step2_statuses     = res['step2_statuses']
         cross_line_misspec = res['cross_line_misspecified']
 
@@ -890,9 +759,6 @@ def compare_selection_strategies(results_list, records_path, test_env_idx, algo_
         s1_seed, s1_acc = _pick(rel_h_bs,   higher_is_better=False)
         s2_seed, s2_acc = _pick(deviations,  higher_is_better=not cross_line_misspec)
         s3_seed, s3_acc = _pick(rel_dhs,     higher_is_better=not cross_line_misspec)
-        has_mmd_shift   = any(v is not None for v in mmd_shifts)
-        s4_seed, s4_acc = (_pick(mmd_shifts,  higher_is_better=False)
-                           if has_mmd_shift else (None, None))
         has_mmd_cross   = any(v is not None for v in mmd_crosses)
         s5_seed, s5_acc = (_pick(mmd_crosses, higher_is_better=not cross_line_misspec)
                            if has_mmd_cross else (None, None))
@@ -905,7 +771,6 @@ def compare_selection_strategies(results_list, records_path, test_env_idx, algo_
             'min_entropy_seed': s1_seed, 'min_entropy_acc': s1_acc,
             'adapt_dev_seed':   s2_seed, 'adapt_dev_acc':   s2_acc,
             'adapt_dH_seed':    s3_seed, 'adapt_dH_acc':    s3_acc,
-            'min_mmd_shift_seed': s4_seed, 'min_mmd_shift_acc': s4_acc,
             'adapt_mmd_x_seed':   s5_seed, 'adapt_mmd_x_acc':   s5_acc,
         })
     return rows
@@ -913,8 +778,7 @@ def compare_selection_strategies(results_list, records_path, test_env_idx, algo_
 
 def print_strategy_comparison(rows, dataset_name, test_env_name):
     strategies = [('min_entropy','min H'), ('adapt_dev','adap |dev|'),
-                  ('adapt_dH','adap dH'), ('min_mmd_shift','min mmd_s'),
-                  ('adapt_mmd_x','adap mmd_x')]
+                  ('adapt_dH','adap dH'), ('adapt_mmd_x','adap mmd_x')]
     print(f"\n{'='*110}")
     print(f"  Selection strategy comparison -- {dataset_name} (test: {test_env_name})")
     print(f"{'='*110}")
@@ -981,6 +845,16 @@ def recommend_algorithm_and_model(
     n_trials=3, algo_a='ERM', algo_bs=None,
     entropy_threshold=0.9, cross_line_r_threshold=0.3,
 ):
+    """
+    Regime detection uses a MAJORITY VOTE across all algo_bs' own Cross-R
+    values, rather than each algorithm's individual Cross-R sign. A single
+    algorithm's optimization quirks (e.g. IRM's bimodal seed population
+    under bad hyperparameters) can flip its own Cross-R without changing
+    what every other algorithm sees on the same benchmark/environment —
+    the regime is a property of the benchmark, not of any one algorithm,
+    so every algo_b is treated as a DG candidate (or not) based on the
+    same dataset-level vote rather than its own individual R.
+    """
     with open(records_path) as f:
         records = json.load(f)
     algo_bs = algo_bs or []
@@ -1000,8 +874,8 @@ def recommend_algorithm_and_model(
                                   test_env_idx, max_entropy, entropy_threshold)
     erm_line = compute_erm_line(preds_dir, valid_a, n_trials, test_env_idx, n_envs)
 
-    separate_trend_algos, all_cross_lines, all_mean_candidate_entropies = [], {}, {}
-
+    # Pass 1: each algo_b casts one Cross-R vote
+    all_cross_lines, valid_seeds_by_algo, valid_b_by_algo = {}, {}, {}
     for algo_b in algo_bs:
         valid_b, _ = get_valid_seeds(preds_dir, algo_b, n_hparams, n_trials,
                                       test_env_idx, max_entropy, entropy_threshold)
@@ -1012,15 +886,29 @@ def recommend_algorithm_and_model(
                                          algo_a, algo_b, n_trials, test_env_idx, n_envs)
         if cross_line is None:
             continue
-        all_cross_lines[algo_b] = cross_line['R']
-        if cross_line['R'] < cross_line_r_threshold:
+        all_cross_lines[algo_b]     = cross_line['R']
+        valid_seeds_by_algo[algo_b] = valid_seeds
+        valid_b_by_algo[algo_b]     = valid_b
+
+    # Majority vote on the dataset-level regime
+    n_mis  = sum(1 for r in all_cross_lines.values() if r >= cross_line_r_threshold)
+    n_well = sum(1 for r in all_cross_lines.values() if r <  cross_line_r_threshold)
+    well_specified = n_well > n_mis if all_cross_lines else False
+
+    # Pass 2: if the majority says well-specified, every algo_b is a DG
+    # candidate regardless of its own individual Cross-R sign
+    separate_trend_algos, all_mean_candidate_entropies = [], {}
+    if well_specified:
+        for algo_b, R in all_cross_lines.items():
             candidate_seeds = compute_candidate_seeds_only(
-                preds_dir, algo_a, algo_b, erm_line, valid_seeds, n_trials, test_env_idx)
+                preds_dir, algo_a, algo_b, erm_line,
+                valid_seeds_by_algo[algo_b], n_trials, test_env_idx)
             mean_h = mean_relative_entropy(preds_dir, algo_b, candidate_seeds,
                                            n_trials, test_env_idx, max_entropy)
             all_mean_candidate_entropies[algo_b] = mean_h
             if mean_h is not None:
-                separate_trend_algos.append((algo_b, cross_line['R'], mean_h, valid_b))
+                separate_trend_algos.append(
+                    (algo_b, R, mean_h, valid_b_by_algo[algo_b]))
 
     if separate_trend_algos:
         separate_trend_algos.sort(key=lambda t: t[2])
@@ -1034,6 +922,7 @@ def recommend_algorithm_and_model(
             'all_cross_lines': all_cross_lines,
             'all_mean_candidate_entropies': all_mean_candidate_entropies,
             'valid_a': valid_a,
+            'n_mis': n_mis, 'n_well': n_well,
         }
     else:
         best = select_best_model(preds_dir, records, algo_a, valid_a,
@@ -1046,6 +935,7 @@ def recommend_algorithm_and_model(
             'all_cross_lines': all_cross_lines,
             'all_mean_candidate_entropies': all_mean_candidate_entropies,
             'valid_a': valid_a,
+            'n_mis': n_mis, 'n_well': n_well,
         }
 
 
@@ -1402,7 +1292,26 @@ if __name__ == '__main__':
     parser.add_argument('--compare_strategies', action='store_true')
     parser.add_argument('--distance_metrics', type=str, nargs='*', default=[],
                         choices=['mmd', 'wasserstein', 'pad'])
+    parser.add_argument('--input_dataset', type=str, default=None,
+                        help='src.datasets.DATASET_CONFIGS key (e.g. ColoredMNIST, '
+                             'RotatedMNIST, PACS, ACSIncome) for input-space distance_metrics')
+    parser.add_argument('--input_data_dir', type=str, default=None,
+                        help='Raw data dir for --input_dataset (required if --distance_metrics set)')
+    parser.add_argument('--input_backbone', type=str, default='resnet50',
+                        help='Transform backbone for --input_dataset (PACS only; ignored otherwise)')
     args = parser.parse_args()
+
+    # Input-space shift is a dataset-level property (identical for every
+    # algo_b), so compute it once here rather than once per algo_b below.
+    precomputed_input_shift = None
+    if args.distance_metrics:
+        precomputed_input_shift = compute_input_space_shift(
+            args.input_dataset, args.input_data_dir, args.test_env_idx, args.n_envs,
+            backbone=args.input_backbone,
+            run_mmd='mmd' in args.distance_metrics,
+            run_wass='wasserstein' in args.distance_metrics,
+            run_pad='pad' in args.distance_metrics,
+        )
 
     results_list = []
     for algo_b in args.algo_b:
@@ -1421,6 +1330,10 @@ if __name__ == '__main__':
             disagreement_rate_threshold = args.disagreement_rate_threshold,
             distance_metrics            = args.distance_metrics,
             irm_anneal_threshold        = args.irm_anneal_threshold,
+            input_dataset               = args.input_dataset,
+            input_data_dir              = args.input_data_dir,
+            input_backbone              = args.input_backbone,
+            precomputed_input_shift     = precomputed_input_shift,
         )
         print_table(results, args.dataset_name, args.test_env_name)
         results_list.append(results)

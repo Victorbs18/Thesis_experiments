@@ -368,5 +368,79 @@
         "weight_decay_g": 0.0
       }
     }
+  },
+  "CSD": {
+    "IIDAccuracySelectionMethod": {
+      "env0_mean": 0.8969138448349764,
+      "env0_std": 0.0,
+      "env1_mean": 0.8036862408915559,
+      "env1_std": 0.0,
+      "env2_mean": 0.10115730818688384,
+      "env2_std": 0.0,
+      "hparams_seed": 2,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.5,
+        "vit_dropout": 0.0,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "weight_decay_d": 0.00579042693530434,
+        "d_steps_per_g_step": 2,
+        "beta1": 0.5,
+        "mlp_width": 115,
+        "mlp_depth": 5,
+        "mlp_dropout": 0.5,
+        "csd_lambda1": 0.010800461608374069,
+        "csd_lambda2": 0.6665652952930151,
+        "lr": 4.670599081369679e-05,
+        "weight_decay": 0.0,
+        "batch_size": 12,
+        "lr_d": 3.9391806086263036e-05
+      }
+    },
+    "OracleSelectionMethod": {
+      "env0_mean": 0.8969138448349764,
+      "env0_std": 0.0,
+      "env1_mean": 0.8034719245606515,
+      "env1_std": 0.0,
+      "env2_mean": 0.10180025717959708,
+      "env2_std": 0.0,
+      "hparams_seed": 1,
+      "hparams": {
+        "data_augmentation": true,
+        "resnet18": false,
+        "resnet50_augmix": true,
+        "dinov2": false,
+        "vit": false,
+        "vit_attn_tune": false,
+        "freeze_bn": false,
+        "lars": false,
+        "linear_steps": 500,
+        "resnet_dropout": 0.5,
+        "vit_dropout": 0.0,
+        "class_balanced": false,
+        "nonlinear_classifier": false,
+        "weight_decay_d": 3.54599265884155e-05,
+        "d_steps_per_g_step": 2,
+        "beta1": 0.5,
+        "mlp_width": 80,
+        "mlp_depth": 5,
+        "mlp_dropout": 0.1,
+        "csd_lambda1": 80.23182246978595,
+        "csd_lambda2": 0.65396990119565,
+        "lr": 8.511453013879485e-05,
+        "weight_decay": 0.0,
+        "batch_size": 228,
+        "lr_d": 0.00011067811954381682
+      }
+    }
   }
 }

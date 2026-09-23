@@ -24,6 +24,7 @@ from domainbed.model_selection import (
 from src.datasets import get_dataset, DATASET_CONFIGS
 from src.train import run_sweep, SKIP_HPARAMS
 from src.networks import patch_domainbed_for_clip
+from src.algorithms import CSD
 
 # Algorithm registry
 
@@ -34,6 +35,7 @@ ALGORITHMS = {
     'CORAL':    CORAL,
     'DANN':     DANN,
     'VREx':     VREx,
+    'CSD':      CSD,
 }
 
 SELECTION_METHODS = {
@@ -66,6 +68,17 @@ def parse_args():
                         choices=['random', 'grid', 'bayesian'])
     parser.add_argument('--backbone', type=str, default='cnn',
                     choices=['cnn', 'resnet50', 'clip'])
+    parser.add_argument('--debug', action='store_true',
+                        help='Print a per-run wall-clock breakdown '
+                             '(loader setup / train / eval / save)')
+    parser.add_argument('--split_mode', type=str, default='single',
+                        choices=['single', 'per_trial'],
+                        help="'single' (default): one fixed 80/20 split "
+                             "reused across all trials, identical to prior "
+                             "behavior. 'per_trial': a DIFFERENT split per "
+                             "trial (shared across every algorithm), "
+                             "written to a separate output folder. "
+                             "Currently only implemented for ColoredMNIST.")
     return parser.parse_args()
 
 
@@ -119,6 +132,12 @@ def main():
         patch_domainbed_for_clip()
     device = args.device if torch.cuda.is_available() else 'cpu'
 
+    # Free speedup on fixed-shape workloads: cuDNN benchmarks a few
+    # convolution algorithms on the first call per shape and caches the
+    # fastest — pays off since image size/batch size are constant within a
+    # run. No-op on CPU.
+    torch.backends.cudnn.benchmark = True
+
     # Dataset config
     dataset_cfg  = DATASET_CONFIGS[args.dataset]
     test_env_idx = args.test_env  if args.test_env  is not None \
@@ -126,9 +145,12 @@ def main():
     n_steps      = args.n_steps   if args.n_steps   is not None \
                                   else dataset_cfg['n_steps']
 
-    # Output dir
-    output_dir = os.path.join(args.output_dir,args.dataset.lower(),f'test_env{test_env_idx}',args.backbone,args.search_method)
-    os.makedirs(output_dir, exist_ok=True) 
+    # Output dir — per_trial mode writes to a sibling folder (suffixed
+    # search-method segment) so it never collides with single-mode results
+    search_method_dir = args.search_method + (
+        '_pertrial' if args.split_mode == 'per_trial' else '')
+    output_dir = os.path.join(args.output_dir,args.dataset.lower(),f'test_env{test_env_idx}',args.backbone,search_method_dir)
+    os.makedirs(output_dir, exist_ok=True)
     # Algorithms
     if args.algorithms is not None:
         algo_names = args.algorithms.split(',')
@@ -160,24 +182,38 @@ def main():
     print(f"  n_steps:      {n_steps}")
     print(f"  Device:       {device}")
     print(f"  Search:       {args.search_method}")
+    print(f"  Split mode:   {args.split_mode}")
     print(f"{'='*60}")
 
     # Load data
-    envs_splits = get_dataset(
-    args.dataset,
-    data_dir=args.data_dir,
-    test_env_idx=test_env_idx,
-    backbone     = args.backbone,
-    )
+    if args.split_mode == 'per_trial':
+        envs_splits_per_trial = get_dataset(
+            args.dataset,
+            data_dir=args.data_dir,
+            test_env_idx=test_env_idx,
+            backbone=args.backbone,
+            split_mode='per_trial',
+            n_trials=args.n_trials,
+        )
+        envs_splits = None
+    else:
+        envs_splits = get_dataset(
+            args.dataset,
+            data_dir=args.data_dir,
+            test_env_idx=test_env_idx,
+            backbone=args.backbone,
+        )
+        envs_splits_per_trial = None
 
     # Run sweep
     save_dir = os.path.join(output_dir, 'models')
     t0       = time.time()
 
     records = run_sweep(
-        algorithm_classes = algo_classes,
-        dataset_name      = args.dataset,
-        envs_splits       = envs_splits,
+        algorithm_classes     = algo_classes,
+        dataset_name          = args.dataset,
+        envs_splits           = envs_splits,
+        envs_splits_per_trial = envs_splits_per_trial,
         test_env_idx      = test_env_idx,
         n_hparams         = args.n_hparams,
         n_trials          = args.n_trials,
@@ -186,6 +222,7 @@ def main():
         save_dir          = save_dir,
         search_method     = args.search_method,
         backbone          = args.backbone,
+        debug             = args.debug,
     )
 
     print(f"\nSweep completed in {(time.time()-t0)/60:.1f} min")
