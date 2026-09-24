@@ -2,8 +2,14 @@
 """
 Single entry point for all domain generalization experiments.
 """
-import sys
 import os
+# Must be set before CUDA initializes (i.e. before the first .cuda()/model
+# .to(device) call) for torch.use_deterministic_algorithms to work on CUDA
+# matrix multiplications — setting it here, before any other import, is the
+# safest place.
+os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DomainBed'))
 
@@ -132,11 +138,16 @@ def main():
         patch_domainbed_for_clip()
     device = args.device if torch.cuda.is_available() else 'cpu'
 
-    # Free speedup on fixed-shape workloads: cuDNN benchmarks a few
-    # convolution algorithms on the first call per shape and caches the
-    # fastest — pays off since image size/batch size are constant within a
-    # run. No-op on CPU.
-    torch.backends.cudnn.benchmark = True
+    # Full reproducibility, chosen over speed: disable cuDNN's
+    # algorithm-selection (which can pick different, not-necessarily-bit-
+    # identical convolution algorithms run-to-run), force deterministic
+    # implementations everywhere PyTorch has one, and error out loudly
+    # instead of silently falling back to a nondeterministic op. No-op on
+    # CPU. Slower than benchmark=True, especially for resnet50/PACS-sized
+    # convs — accepted deliberately in exchange for bit-reproducible runs.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True)
 
     # Dataset config
     dataset_cfg  = DATASET_CONFIGS[args.dataset]
