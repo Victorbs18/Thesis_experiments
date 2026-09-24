@@ -12,6 +12,7 @@ Training loop
 
 import os
 import time
+import random
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -274,9 +275,12 @@ def run_single(
 ):
     timers = {} if debug else None
 
-    # Reproducibility
+    # Reproducibility — torch.manual_seed also seeds all CUDA devices
+    # (calls torch.cuda.manual_seed_all internally); random.seed covers
+    # torchvision transforms that use Python's RNG rather than torch's.
     torch.manual_seed(trial_seed)
     np.random.seed(trial_seed)
+    random.seed(trial_seed)
 
     # Infer input shape
     t0 = time.time()

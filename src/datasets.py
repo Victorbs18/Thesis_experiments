@@ -179,19 +179,22 @@ def get_rotated_mnist_per_trial(data_dir='./data', n_trials=3, test_env_idx=5,
 
 # ColoredMNIST
 
-def _bernoulli(p, size):
-    return (torch.rand(size) < p).float()
+def _bernoulli(p, size, generator=None):
+    return (torch.rand(size, generator=generator) < p).float()
 
 
 def _xor(a, b):
     return (a - b).abs()
 
 
-def _color_dataset(images, labels, environment):
-    """Exact DomainBed color_dataset function."""
+def _color_dataset(images, labels, environment, generator=None):
+    """Exact DomainBed color_dataset function, with an optional seeded
+    generator so the label-flip noise and color assignment are reproducible
+    (previously used PyTorch's global unseeded RNG here — see
+    _build_colored_mnist_envs)."""
     labels = (labels < 5).float()
-    labels = _xor(labels, _bernoulli(0.25, len(labels)))
-    colors = _xor(labels, _bernoulli(environment, len(labels)))
+    labels = _xor(labels, _bernoulli(0.25, len(labels), generator=generator))
+    colors = _xor(labels, _bernoulli(environment, len(labels), generator=generator))
     images = torch.stack([images, images], dim=1)
     images[torch.arange(len(images)), (1 - colors).long(), :, :] *= 0
     x = images.float().div_(255.0)
@@ -199,14 +202,18 @@ def _color_dataset(images, labels, environment):
     return {'images': x, 'labels': y}
 
 
-def _build_colored_mnist_envs(data_dir):
+def _build_colored_mnist_envs(data_dir, data_seed=0):
     """
     Generate the 3 ColoredMNIST environments (shared base data, before
     train/val splitting). Call this ONCE and reuse the result across
-    multiple splits — _color_dataset's label-noise/color assignment uses
-    PyTorch's global RNG (a known, pre-existing non-determinism), so calling
-    this repeatedly would produce a different synthetic realization each
-    time, not just a different train/val partition of the same data.
+    multiple splits.
+
+    data_seed controls the digit permutation AND the label-flip noise AND
+    the color assignment — the whole synthetic realization is now fully
+    reproducible from this one seed (previously only the permutation was
+    seeded; the label-noise/color draws used PyTorch's global unseeded RNG,
+    so separate calls — e.g. separate `main.py` invocations — produced
+    different, unrepeatable synthetic datasets even with identical code).
     """
     mnist_train = MNIST(data_dir, train=True,  download=True)
     mnist_test  = MNIST(data_dir, train=False, download=True)
@@ -215,7 +222,7 @@ def _build_colored_mnist_envs(data_dir):
     labels = torch.cat([mnist_train.targets, mnist_test.targets])
 
     rng = torch.Generator()
-    rng.manual_seed(0)
+    rng.manual_seed(data_seed)
     perm   = torch.randperm(len(images), generator=rng)
     images = images[perm]
     labels = labels[perm]
@@ -223,21 +230,26 @@ def _build_colored_mnist_envs(data_dir):
     environments = [0.1, 0.2, 0.9]
     envs = [
         _color_dataset(images[i::len(environments)],
-                       labels[i::len(environments)], e)
+                       labels[i::len(environments)], e, generator=rng)
         for i, e in enumerate(environments)
     ]
     return envs, environments
 
 
 def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
-                      backbone='cnn'):
+                      backbone='cnn', data_seed=0):
     """
     Build ColoredMNIST exactly as DomainBed does.
     3 environments: e=0.1 (+90%), e=0.2 (+80%), e=0.9 (-90%)
     Returns list of (in_env, out_env) tuples.
     backbone argument accepted but ignored (always uses CNN).
+
+    seed controls the train/val holdout split; data_seed controls the
+    underlying synthetic realization (digit permutation, label noise,
+    color assignment) — see _build_colored_mnist_envs. Both default to 0,
+    so the default call is now fully reproducible across separate runs.
     """
-    envs, environments = _build_colored_mnist_envs(data_dir)
+    envs, environments = _build_colored_mnist_envs(data_dir, data_seed=data_seed)
 
     print(f"ColoredMNIST loaded:")
     for i, (e, env) in enumerate(zip(environments, envs)):
@@ -249,7 +261,7 @@ def get_colored_mnist(data_dir='./data', holdout_frac=0.2, seed=0,
 
 
 def get_colored_mnist_per_trial(data_dir='./data', n_trials=3,
-                                holdout_frac=0.2, backbone='cnn'):
+                                holdout_frac=0.2, backbone='cnn', data_seed=0):
     """
     Same ColoredMNIST base data as get_colored_mnist, generated ONCE, split
     n_trials different ways (seed=0..n_trials-1) — one train/val partition
@@ -257,8 +269,11 @@ def get_colored_mnist_per_trial(data_dir='./data', n_trials=3,
     trial index (so predictions stay comparable trial-to-trial across
     algorithms — required for Cross-R/CrA's trial-matched agreement).
     Returns {trial_seed: envs_splits}.
+
+    data_seed controls the underlying synthetic realization — see
+    get_colored_mnist / _build_colored_mnist_envs.
     """
-    envs, environments = _build_colored_mnist_envs(data_dir)
+    envs, environments = _build_colored_mnist_envs(data_dir, data_seed=data_seed)
 
     print(f"ColoredMNIST loaded (per-trial split, {n_trials} trials):")
     for i, (e, env) in enumerate(zip(environments, envs)):
@@ -451,7 +466,7 @@ DATASET_CONFIGS = {
 
 def get_dataset(dataset_name, data_dir, test_env_idx=None,
                 holdout_frac=0.2, seed=0, backbone='resnet50',
-                split_mode='single', n_trials=None):
+                split_mode='single', n_trials=None, data_seed=0):
     """
     Single entry point for all datasets.
 
@@ -485,7 +500,7 @@ def get_dataset(dataset_name, data_dir, test_env_idx=None,
             raise ValueError("n_trials is required when split_mode='per_trial'")
         if dataset_name == 'ColoredMNIST':
             return get_colored_mnist_per_trial(data_dir, n_trials, holdout_frac,
-                                               backbone)
+                                               backbone, data_seed=data_seed)
         elif dataset_name == 'RotatedMNIST':
             return get_rotated_mnist_per_trial(data_dir, n_trials, test_env_idx,
                                                holdout_frac, backbone)
@@ -496,7 +511,7 @@ def get_dataset(dataset_name, data_dir, test_env_idx=None,
             )
 
     if dataset_name == 'ColoredMNIST':
-        return cfg['loader'](data_dir, holdout_frac, seed, backbone)
+        return cfg['loader'](data_dir, holdout_frac, seed, backbone, data_seed=data_seed)
     else:
         return cfg['loader'](data_dir, test_env_idx, holdout_frac, seed,
                              backbone)

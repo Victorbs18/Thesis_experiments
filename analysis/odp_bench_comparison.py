@@ -133,8 +133,26 @@ def extract_seed_metrics(cfg, records, algo, true_labels=None, erm_probs=None):
         if not test_probs_trials:
             continue
 
-        mean_test = np.mean(test_probs_trials, axis=0)
-        mean_val  = np.vstack(val_probs_trials) if val_probs_trials else None
+        # pooled_test: all trials' rows stacked together (not averaged).
+        # Used for every score that treats predictions as a SET/distribution
+        # (entropy, nuc_norm, mde, dispersion, doc's test side, and the
+        # MMD/Wasserstein/PAD point clouds) — valid whether or not trials
+        # share the same underlying examples, since it never assumes row i
+        # of one trial corresponds to row i of another. This is also more
+        # correct than an elementwise mean even in single-split mode: the
+        # entropy of an averaged distribution is a different (and less
+        # meaningful) quantity than the average entropy of individual
+        # predictions.
+        #
+        # mean_test: the old elementwise average, kept ONLY for the
+        # per-class breakdown below, which pairs predictions index-by-index
+        # against a single true_labels array — that alignment requires all
+        # trials to share the same physical examples, which is only true in
+        # single-split mode (true_labels is None under per-trial splits, so
+        # this path is simply unused there).
+        pooled_test = np.vstack(test_probs_trials)
+        mean_test   = np.mean(test_probs_trials, axis=0)
+        mean_val    = np.vstack(val_probs_trials) if val_probs_trials else None
 
         oracle_accs = [r[f'env{test_env}_out_acc'] for r in recs_hp
                        if f'env{test_env}_out_acc' in r]
@@ -167,27 +185,48 @@ def extract_seed_metrics(cfg, records, algo, true_labels=None, erm_probs=None):
 
         seed_data[hpseed] = {
             'atc':        float(np.mean(atc_trials)) if atc_trials else None,
-            'doc':        doc_score(mean_val, mean_test) if mean_val is not None else None,
-            'entropy':    compute_entropy(mean_test),
-            'nuc_norm':   nuclear_norm_score(mean_test),
-            'mde':        mde_score(mean_test),
-            'dispersion': dispersion_score(mean_test),
+            'doc':        doc_score(mean_val, pooled_test) if mean_val is not None else None,
+            'entropy':    compute_entropy(pooled_test),
+            'nuc_norm':   nuclear_norm_score(pooled_test),
+            'mde':        mde_score(pooled_test),
+            'dispersion': dispersion_score(pooled_test),
             'agreement':  None,
             'crossagr':   None,
             'trainval':   trainval,
             'oracle':     oracle,
             'oracle_std': oracle_std,
-            'test_probs': mean_test,
+            'test_probs': pooled_test,
+            'test_probs_trials': test_probs_trials,
+            'test_probs_mean_for_per_class': mean_test,
             'per_class':  per_class,
         }
 
-    # Agreement (same-algo, across seeds)
-    valid_probs = {s: d['test_probs'] for s, d in seed_data.items()
-                   if d['test_probs'] is not None}
-    if len(valid_probs) >= 2:
-        for s, sc in agreement_scores(valid_probs).items():
-            seed_data[s]['agreement'] = sc
+    # Agreement (same-algo, across seeds) — computed per trial (same trial
+    # index = same physical held-out split, shared across every seed) then
+    # averaged, so this stays valid under per-trial splits: it never
+    # compares rows from different trials against each other.
+    valid_trials = {s: d['test_probs_trials'] for s, d in seed_data.items()
+                    if d.get('test_probs_trials')}
+    if len(valid_trials) >= 2:
+        per_trial_scores = {s: [] for s in valid_trials}
+        for trial in range(N_TRIALS):
+            trial_probs = {s: tp[trial] for s, tp in valid_trials.items()
+                           if trial < len(tp)}
+            if len(trial_probs) < 2:
+                continue
+            for s, sc in agreement_scores(trial_probs).items():
+                per_trial_scores[s].append(sc)
+        for s, scs in per_trial_scores.items():
+            seed_data[s]['agreement'] = float(np.mean(scs)) if scs else None
+
         if true_labels is not None:
+            # Single-split only (true_labels is None under per-trial splits,
+            # matching per_class's guard above) — must use the same
+            # elementwise-averaged, true_labels-aligned array as the
+            # per_class block above, not the pooled (3x-length) test_probs.
+            valid_probs = {s: d['test_probs_mean_for_per_class']
+                           for s, d in seed_data.items()
+                           if d.get('test_probs_mean_for_per_class') is not None}
             for c in range(n_classes):
                 mask = true_labels == c
                 if mask.sum() < 2:

@@ -41,6 +41,17 @@ CONFIGS = [
         'class_names':  ['y=0 (label<5)', 'y=1 (label>=5)'],
     },
     {
+        'name':         'ColoredMNIST per-trial (env2)',
+        'records_path': 'results/coloredmnist/test_env2/cnn/random_pertrial/records.json',
+        'preds_dir':    'results/coloredmnist/test_env2/cnn/random_pertrial/models',
+        'test_env_idx': 2,
+        'n_envs':       3,
+        'dtype':        'coloredmnist',
+        'data_dir':     './data',
+        'class_names':  ['y=0 (label<5)', 'y=1 (label>=5)'],
+        'split_mode':   'per_trial',
+    },
+    {
         'name':         'RotatedMNIST (env5)',
         'records_path': 'results/rotatedmnist/test_env5/cnn/random/records.json',
         'preds_dir':    'results/rotatedmnist/test_env5/cnn/random/models',
@@ -120,7 +131,17 @@ def get_test_labels(cfg):
     """
     Reconstruct ground-truth labels for the test env's 20% holdout split,
     exactly matching the split used during training (seed=0 throughout).
+
+    Returns None for split_mode='per_trial' configs: the holdout set (and
+    therefore the true labels) differs per trial there, so a single labels
+    array can't be matched against pooled/per-trial predictions the way
+    this function assumes. Per-class analysis (which needs this) is a
+    known gap for per-trial configs — see the module docstring in
+    odp_bench_comparison.py.
     """
+    if cfg.get('split_mode') == 'per_trial':
+        return None
+
     dtype    = cfg['dtype']
     test_env = cfg['test_env_idx']
     data_dir = cfg['data_dir']
