@@ -127,6 +127,28 @@ def get_image_transforms(backbone='resnet50'):
 
 # RotatedMNIST
 
+def _build_rotated_mnist_envs(data_dir, test_env_idx):
+    """
+    Generate RotatedMNIST's 6 per-rotation environments ONCE. Call this once
+    and reuse the result across multiple splits — DomainBed's own
+    MultipleEnvironmentMNIST base class shuffles the source images with a
+    completely unseeded torch.randperm(...) (worse than ColoredMNIST's own
+    RNG issue, which at least seeds its permutation), so a fresh
+    DB_RotatedMNIST(...) call would reassign which images go to which of the
+    6 rotation environments every time — not just produce a different
+    train/val partition of the same data.
+    """
+    db_dataset = DB_RotatedMNIST(data_dir, test_envs=[test_env_idx], hparams={})
+    env_names  = DB_RotatedMNIST.ENVIRONMENTS  # ['0', '15', '30', '45', '60', '75']
+
+    print(f"RotatedMNIST loaded (test env: {env_names[test_env_idx]}°):")
+    for i, env in enumerate(db_dataset.datasets):
+        marker = ' : test' if i == test_env_idx else ''
+        print(f"  env{i} ({env_names[i]}°): {len(env)} samples{marker}")
+
+    return db_dataset.datasets
+
+
 def get_rotated_mnist(data_dir='./data', test_env_idx=5,
                       holdout_frac=0.2, seed=0, backbone='cnn'):
     """
@@ -135,18 +157,24 @@ def get_rotated_mnist(data_dir='./data', test_env_idx=5,
     backbone argument accepted but ignored (always uses CNN).
     Returns list of (in_env, out_env) tuples.
     """
-    db_dataset = DB_RotatedMNIST(data_dir, test_envs=[test_env_idx], hparams={})
-    env_names  = DB_RotatedMNIST.ENVIRONMENTS  # ['0', '15', '30', '45', '60', '75']
+    envs = _build_rotated_mnist_envs(data_dir, test_env_idx)
+    return [split_env_subset(env, holdout_frac, seed) for env in envs]
 
-    print(f"RotatedMNIST loaded (test env: {env_names[test_env_idx]}°):")
-    envs_splits = []
-    for i, env in enumerate(db_dataset.datasets):
-        marker = ' : test' if i == test_env_idx else ''
-        print(f"  env{i} ({env_names[i]}°): {len(env)} samples{marker}")
-        in_env, out_env = split_env_subset(env, holdout_frac, seed)
-        envs_splits.append((in_env, out_env))
 
-    return envs_splits
+def get_rotated_mnist_per_trial(data_dir='./data', n_trials=3, test_env_idx=5,
+                                holdout_frac=0.2, backbone='cnn'):
+    """
+    Same RotatedMNIST base data as get_rotated_mnist, generated ONCE, split
+    n_trials different ways (seed=0..n_trials-1) — one train/val partition
+    per trial, shared across every algorithm/hparams_seed that uses that
+    trial index (required for Cross-R/CrA's trial-matched agreement).
+    Returns {trial_seed: envs_splits}.
+    """
+    envs = _build_rotated_mnist_envs(data_dir, test_env_idx)
+    return {
+        t: [split_env_subset(env, holdout_frac, seed=t) for env in envs]
+        for t in range(n_trials)
+    }
 
 
 # ColoredMNIST
@@ -432,7 +460,7 @@ def get_dataset(dataset_name, data_dir, test_env_idx=None,
     split_mode='per_trial': one DIFFERENT split per trial (seed=0..n_trials-1),
       shared across every algorithm/hparams_seed for that trial. Returns
       {trial_seed: envs_splits} instead of a single envs_splits list.
-      Currently only implemented for ColoredMNIST.
+      Currently implemented for ColoredMNIST and RotatedMNIST.
 
     Usage:
         envs_splits = get_dataset('ColoredMNIST', data_dir='./data')
@@ -453,15 +481,19 @@ def get_dataset(dataset_name, data_dir, test_env_idx=None,
         test_env_idx = cfg['test_env_idx']
 
     if split_mode == 'per_trial':
-        if dataset_name != 'ColoredMNIST':
-            raise NotImplementedError(
-                f"split_mode='per_trial' is currently only implemented for "
-                f"ColoredMNIST (got '{dataset_name}')."
-            )
         if n_trials is None:
             raise ValueError("n_trials is required when split_mode='per_trial'")
-        return get_colored_mnist_per_trial(data_dir, n_trials, holdout_frac,
-                                           backbone)
+        if dataset_name == 'ColoredMNIST':
+            return get_colored_mnist_per_trial(data_dir, n_trials, holdout_frac,
+                                               backbone)
+        elif dataset_name == 'RotatedMNIST':
+            return get_rotated_mnist_per_trial(data_dir, n_trials, test_env_idx,
+                                               holdout_frac, backbone)
+        else:
+            raise NotImplementedError(
+                f"split_mode='per_trial' is currently only implemented for "
+                f"ColoredMNIST and RotatedMNIST (got '{dataset_name}')."
+            )
 
     if dataset_name == 'ColoredMNIST':
         return cfg['loader'](data_dir, holdout_frac, seed, backbone)
