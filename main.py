@@ -85,6 +85,11 @@ def parse_args():
                              "trial (shared across every algorithm), "
                              "written to a separate output folder. "
                              "Currently only implemented for ColoredMNIST.")
+    parser.add_argument('--data_seed', type=int, default=0,
+                        help='Seeds the underlying synthetic dataset '
+                             'realization (digit permutation, label noise, '
+                             'color assignment) for ColoredMNIST/RotatedMNIST. '
+                             'Independent of hparams_seed/trial_seed.')
     return parser.parse_args()
 
 
@@ -159,7 +164,8 @@ def main():
     # Output dir — per_trial mode writes to a sibling folder (suffixed
     # search-method segment) so it never collides with single-mode results
     search_method_dir = args.search_method + (
-        '_pertrial' if args.split_mode == 'per_trial' else '')
+        '_pertrial' if args.split_mode == 'per_trial' else '') + (
+        f'_dataseed{args.data_seed}' if args.data_seed != 0 else '')
     output_dir = os.path.join(args.output_dir,args.dataset.lower(),f'test_env{test_env_idx}',args.backbone,search_method_dir)
     os.makedirs(output_dir, exist_ok=True)
     # Algorithms
@@ -205,6 +211,7 @@ def main():
             backbone=args.backbone,
             split_mode='per_trial',
             n_trials=args.n_trials,
+            data_seed=args.data_seed,
         )
         envs_splits = None
     else:
@@ -213,6 +220,7 @@ def main():
             data_dir=args.data_dir,
             test_env_idx=test_env_idx,
             backbone=args.backbone,
+            data_seed=args.data_seed,
         )
         envs_splits_per_trial = None
 

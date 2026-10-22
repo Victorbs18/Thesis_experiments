@@ -8,5 +8,14 @@ dependencies:
   - torchvision
   - pip
   - pip:
+    - numpy
     - scipy
     - matplotlib
+    - scikit-learn
+    - Pillow
+    - timm
+    - wilds
+    - umap-learn
+    - folktables
+    - POT
+    - git+https://github.com/openai/CLIP.git

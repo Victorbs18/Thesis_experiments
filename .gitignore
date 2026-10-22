@@ -1,7 +1,10 @@
-data/ 
-__pycache__/ 
-*.pt 
-*.pyc 
+data/
+__pycache__/
+*.pt
+*.pyc
 data/
 *.zip
-"results/" 
+# ACSIncome's saved features are ~2.9 GB total (hundreds of MB-scale .npy
+# files) — too large for git. Excluded here; other results/ subdirs are
+# still tracked as before.
+results/acsincome/
