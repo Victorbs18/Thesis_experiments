@@ -1,0 +1,98 @@
+diff --git a/domainbed/datasets.py b/domainbed/datasets.py
+index 8c89f5d..2d49817 100644
+--- a/domainbed/datasets.py
++++ b/domainbed/datasets.py
+@@ -104,7 +104,13 @@ class MultipleEnvironmentMNIST(MultipleDomainDataset):
+         original_labels = torch.cat((original_dataset_tr.targets,
+                                      original_dataset_te.targets))
+ 
+-        shuffle = torch.randperm(len(original_images))
++        # Seeded (was torch.randperm(len(original_images)) with no seed,
++        # using PyTorch's global RNG — made every separate process
++        # invocation produce a different shuffle, hence a different
++        # synthetic dataset, not just a different split of the same one).
++        _shuffle_rng = torch.Generator()
++        _shuffle_rng.manual_seed(0)
++        shuffle = torch.randperm(len(original_images), generator=_shuffle_rng)
+ 
+         original_images = original_images[shuffle]
+         original_labels = original_labels[shuffle]
+diff --git a/domainbed/hparams_registry.py b/domainbed/hparams_registry.py
+index b7b6a2b..380c673 100644
+--- a/domainbed/hparams_registry.py
++++ b/domainbed/hparams_registry.py
+@@ -13,6 +13,7 @@ def _hparams(algorithm, dataset, random_seed):
+     New algorithms / networks / etc. should add entries here.
+     """
+     SMALL_IMAGES = ['Debug28', 'RotatedMNIST', 'ColoredMNIST']
++    TABULAR = ['ACSIncome']
+ 
+     hparams = {}
+ 
+@@ -56,6 +57,20 @@ def _hparams(algorithm, dataset, random_seed):
+         _hparam('mlp_depth', 3, lambda r: int(r.choice([3, 4, 5])))
+         _hparam('mlp_dropout', 0., lambda r: r.choice([0., 0.1, 0.5]))
+ 
++    elif algorithm == 'CSD':
++        # D^Z / D^ZY discriminators reuse DANN's MLP + optimizer hparams
++        _hparam('weight_decay_d', 0., lambda r: 10**r.uniform(-6, -2))
++        _hparam('d_steps_per_g_step', 1, lambda r: int(2**r.uniform(0, 3)))
++        _hparam('beta1', 0.5, lambda r: r.choice([0., 0.5]))
++        _hparam('mlp_width', 256, lambda r: int(2 ** r.uniform(6, 10)))
++        _hparam('mlp_depth', 3, lambda r: int(r.choice([3, 4, 5])))
++        _hparam('mlp_dropout', 0., lambda r: r.choice([0., 0.1, 0.5]))
++        # CSD-specific: DANN term weight (lambda1-lambda2) and concept-shift
++        # penalty weight (lambda2); lambda1==lambda2 -> pure concept-shift
++        # penalization, lambda2==0 -> reduces to standard DANN
++        _hparam('csd_lambda1', 1.0, lambda r: 10**r.uniform(-2, 2))
++        _hparam('csd_lambda2', 1.0, lambda r: 10**r.uniform(-2, 2))
++
+     elif algorithm == 'Fish':
+         _hparam('meta_lr', 0.5, lambda r:r.choice([0.05, 0.1, 0.5]))
+ 
+@@ -202,11 +217,24 @@ def _hparams(algorithm, dataset, random_seed):
+     # Dataset-and-algorithm-specific hparam definitions. Each block of code
+     # below corresponds to exactly one hparam. Avoid nested conditionals.
+ 
++    # Tabular datasets use DomainBed's built-in MLP featurizer (1D input
++    # shape). DANN/CDANN/ADRMX already define mlp_width/depth/dropout above
++    # for their discriminator regardless of dataset — skip if so to avoid
++    # redefining the same hparam.
++    if dataset in TABULAR and 'mlp_width' not in hparams:
++        _hparam('mlp_width', 128, lambda r: int(2 ** r.uniform(6, 8)))
++        _hparam('mlp_depth', 3, lambda r: int(r.choice([2, 3, 4])))
++        _hparam('mlp_dropout', 0.1, lambda r: r.choice([0., 0.1, 0.3]))
++
+     if dataset in SMALL_IMAGES:
+         if algorithm == "ADRMX":
+             _hparam('lr', 3e-3, lambda r: r.choice([5e-4, 1e-3, 2e-3, 3e-3]))
+         else:
+             _hparam('lr', 1e-3, lambda r: 10**r.uniform(-4.5, -2.5))
++    elif dataset in TABULAR:
++        # tabular MLP trained from scratch needs a much higher LR than the
++        # image-backbone fine-tuning range used by the "else" branch below
++        _hparam('lr', 1e-3, lambda r: 10**r.uniform(-4, -2))
+     else:
+         if algorithm == "ADRMX":
+             _hparam('lr', 3e-5, lambda r: r.choice([2e-5, 3e-5, 4e-5, 5e-5]))
+@@ -220,6 +248,8 @@ def _hparams(algorithm, dataset, random_seed):
+ 
+     if dataset in SMALL_IMAGES:
+         _hparam('batch_size', 64, lambda r: int(2**r.uniform(3, 9)))
++    elif dataset in TABULAR:
++        _hparam('batch_size', 256, lambda r: int(2**r.uniform(6, 9)))
+     elif algorithm == 'ARM':
+         _hparam('batch_size', 8, lambda r: 8)
+     elif algorithm == 'RDM':
+@@ -237,9 +267,9 @@ def _hparams(algorithm, dataset, random_seed):
+     elif algorithm in ['DANN', 'CDANN']:
+         _hparam('lr_g', 5e-5, lambda r: 10**r.uniform(-5, -3.5))
+ 
+-    if algorithm in ['DANN', 'CDANN'] and dataset in SMALL_IMAGES:
++    if algorithm in ['DANN', 'CDANN', 'CSD'] and dataset in SMALL_IMAGES:
+         _hparam('lr_d', 1e-3, lambda r: 10**r.uniform(-4.5, -2.5))
+-    elif algorithm in ['DANN', 'CDANN']:
++    elif algorithm in ['DANN', 'CDANN', 'CSD']:
+         _hparam('lr_d', 5e-5, lambda r: 10**r.uniform(-5, -3.5))
+ 
+     if algorithm in ['DANN', 'CDANN'] and dataset in SMALL_IMAGES:
