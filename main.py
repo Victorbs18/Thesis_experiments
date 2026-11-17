@@ -90,6 +90,11 @@ def parse_args():
                              'realization (digit permutation, label noise, '
                              'color assignment) for ColoredMNIST/RotatedMNIST. '
                              'Independent of hparams_seed/trial_seed.')
+    parser.add_argument('--save_models', action='store_true',
+                        help='Also save each run\'s weights (featurizer + '
+                             'classifier) next to its predictions, as '
+                             '{ALGO}_hpseed{h}_trial{t}_weights.pt. Reload '
+                             'with src.train.load_model.')
     return parser.parse_args()
 
 
@@ -110,7 +115,7 @@ def print_results(all_results, dataset_cfg, algo_names, dataset_name):
         print(f"\n  Selection: {method.name}")
         print(f"  {'Algorithm':<12} "
               + " ".join(f"{e:>16}" for e in env_names))
-        print(f"  {'─'*75}")
+        print(f"  {'-'*75}")
 
         for algo_name in algo_names:
             if algo_name not in all_results:
@@ -242,6 +247,7 @@ def main():
         search_method     = args.search_method,
         backbone          = args.backbone,
         debug             = args.debug,
+        save_weights      = args.save_models,
     )
 
     print(f"\nSweep completed in {(time.time()-t0)/60:.1f} min")

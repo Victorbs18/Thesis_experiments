@@ -316,19 +316,27 @@ def evaluate(seed_data, score_key, oracle_key='oracle'):
     return float(spearmanr(scores, oracles).statistic)
 
 
-def evaluate_sel(seed_data, score_key, minimize=False):
+def evaluate_sel(seed_data, score_key, minimize=False, report_key='oracle',
+                 return_key=False):
     """
     Selected model OOD acc (± its trial std). minimize=True picks argmin
     (e.g. DOC, MDE). The std is the selected seed's own trial-to-trial std
     (oracle_std), not variance across the 20 hparam seeds.
+
+    report_key: which accuracy to report for the selected seed ('oracle' =
+      test env out split; 'test_in' = test env in split). Its std is read
+      from f'{report_key}_std'.
+    return_key: also return the selected seed's key.
     """
     valid = {s: d for s, d in seed_data.items()
-             if d.get(score_key) is not None and d.get('oracle') is not None}
+             if d.get(score_key) is not None and d.get('oracle') is not None
+             and d.get(report_key) is not None}
     if not valid:
-        return None, None
+        return (None, None, None) if return_key else (None, None)
     pick = min if minimize else max
     best = pick(valid, key=lambda s: valid[s][score_key])
-    return float(valid[best]['oracle']), valid[best].get('oracle_std')
+    result = (float(valid[best][report_key]), valid[best].get(f'{report_key}_std'))
+    return result + (best,) if return_key else result
 
 # ---------------------------------------------------------------------------
 # Evaluation — CrA: majority-vote Cross-R regime sign
@@ -450,7 +458,8 @@ def compute_regime_sign(cfg, available_algos, entropy_threshold=0.9,
     return regime, votes, n_mis, n_well, erm_self_r
 
 
-def evaluate_regime_sel(seed_data, score_key, regime, higher_is_similar):
+def evaluate_regime_sel(seed_data, score_key, regime, higher_is_similar,
+                        report_key='oracle', return_key=False):
     """
     Shared selection rule behind CrA and the MMD/Wasserstein/PAD cross-
     distance scores: pick the seed matching the majority-vote regime's
@@ -468,24 +477,30 @@ def evaluate_regime_sel(seed_data, score_key, regime, higher_is_similar):
     algorithms on this benchmark (computed once per dataset, not per
     algorithm) — never from this algorithm's own oracle accuracy.
 
+    report_key / return_key: as in evaluate_sel.
+
     Returns:
       sel_acc : OOD accuracy of the selected model
       sel_std : that seed's own trial-to-trial std (not variance across seeds)
+      (key    : the selected seed, only if return_key)
     """
+    empty = (None, None, None) if return_key else (None, None)
     if regime is None:
-        return None, None
+        return empty
 
     valid = {s: d for s, d in seed_data.items()
              if d.get(score_key) is not None
-             and d.get('oracle')  is not None}
+             and d.get('oracle')  is not None
+             and d.get(report_key) is not None}
     if len(valid) < 3:
-        return None, None
+        return empty
 
     want_most_similar = (regime == 'misspecified')
     want_max = want_most_similar == higher_is_similar
     pick = max if want_max else min
     best = pick(valid, key=lambda s: valid[s][score_key])
-    return float(valid[best]['oracle']), valid[best].get('oracle_std')
+    result = (float(valid[best][report_key]), valid[best].get(f'{report_key}_std'))
+    return result + (best,) if return_key else result
 
 
 def evaluate_cra(seed_data, regime):

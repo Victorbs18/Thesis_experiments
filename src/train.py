@@ -7,6 +7,7 @@ Training loop
 - Single process
 - Evaluates only at final step
 - Saves predictions, probabilities and features for later analysis
+- Optionally saves model weights (--save_models); reload them with load_model
 - Returns results in DomainBed's flat record format
 """
 
@@ -255,6 +256,77 @@ def save_model_outputs(algorithm, all_envs, test_env_idx,
     _t('save_io', t0)
 
 
+# Model weights
+
+def _trained_state(module):
+    """
+    state_dict entries that training can change: trainable parameters and
+    buffers (e.g. BatchNorm statistics). Frozen parameters (CLIP's frozen
+    blocks) are left out — load_model rebuilds them from the public
+    pretrained weights, so storing them would only waste space.
+    """
+    frozen = {name for name, p in module.named_parameters() if not p.requires_grad}
+    return {k: v.detach().cpu().clone()
+            for k, v in module.state_dict().items() if k not in frozen}
+
+
+def save_model_weights(algorithm, algorithm_name, hparams_seed, trial_seed,
+                       input_shape, n_classes, hp, save_dir, record):
+    """
+    Save what is needed to make predictions: featurizer + classifier
+    (algorithm.predict(x) == classifier(featurizer(x)) for every algorithm
+    used here). Training-only parts (DANN discriminator, optimizer state)
+    are not saved.
+    """
+    path = os.path.join(save_dir,
+        f"{algorithm_name}_hpseed{hparams_seed}_trial{trial_seed}_weights.pt")
+    torch.save({
+        'algorithm':   algorithm_name,
+        'input_shape': list(input_shape),
+        'n_classes':   n_classes,
+        # plain Python values, so torch.load(weights_only=True) accepts them
+        'hparams':     {k: (v.item() if hasattr(v, 'item') else v) for k, v in hp.items()},
+        'featurizer':  _trained_state(algorithm.featurizer),
+        'classifier':  _trained_state(algorithm.classifier),
+    }, path)
+    record['model_path'] = path
+
+
+def load_model(path, device='cpu'):
+    """
+    Rebuild the prediction network of a run saved with --save_models.
+    Returns torch.nn.Sequential(featurizer, classifier) in eval mode:
+    model(x) gives the same logits as algorithm.predict(x) did.
+
+    Usage:
+        model = load_model('results/.../ERM_hpseed0_trial0_weights.pt', 'cuda')
+        preds = model(x.to('cuda')).argmax(1)
+    """
+    from domainbed import networks
+    from src.networks import patch_domainbed_for_clip
+
+    ckpt = torch.load(path, map_location='cpu')
+    hp   = ckpt['hparams']
+    if hp.get('use_clip', False):
+        patch_domainbed_for_clip()
+
+    featurizer = networks.Featurizer(tuple(ckpt['input_shape']), hp)
+    classifier = networks.Classifier(featurizer.n_outputs, ckpt['n_classes'],
+                                     hp['nonlinear_classifier'])
+
+    for module, state in [(featurizer, ckpt['featurizer']),
+                          (classifier, ckpt['classifier'])]:
+        missing, unexpected = module.load_state_dict(state, strict=False)
+        # only the frozen (pretrained, never trained) parameters may be missing
+        frozen = {n for n, p in module.named_parameters() if not p.requires_grad}
+        if unexpected or set(missing) - frozen:
+            raise RuntimeError(f"{path}: weights do not match the network "
+                               f"(missing={sorted(set(missing) - frozen)}, "
+                               f"unexpected={unexpected})")
+
+    return torch.nn.Sequential(featurizer, classifier).to(device).eval()
+
+
 # Single training run
 
 def run_single(
@@ -272,6 +344,7 @@ def run_single(
     save_dir=None,
     search_method='random',
     debug=False,
+    save_weights=False,
 ):
     timers = {} if debug else None
 
@@ -337,7 +410,17 @@ def run_single(
     # twice over the same data (evaluate() then save_model_outputs()).
     precomputed_out = {}
     for i, (in_env, out_env) in enumerate(all_envs):
-        record[f'env{i}_in_acc'] = evaluate(algorithm, in_env, device, timers=timers)
+        if save_dir is not None and i == test_env_idx:
+            # test env: also keep per-image predictions on its 80% in split
+            # (where DomainBed reports test accuracy), next to the out split's
+            preds, probs, labels = predict_env(algorithm, in_env, device, timers=timers)
+            record[f'env{i}_in_acc'] = float((preds == labels).mean())
+            os.makedirs(save_dir, exist_ok=True)
+            prefix = f"{algorithm_class.__name__}_hpseed{hparams_seed}_trial{trial_seed}_env{i}_in"
+            np.save(os.path.join(save_dir, f"{prefix}_preds.npy"), preds)
+            np.save(os.path.join(save_dir, f"{prefix}_probs.npy"), probs)
+        else:
+            record[f'env{i}_in_acc'] = evaluate(algorithm, in_env, device, timers=timers)
 
         if save_dir is not None:
             preds, probs, labels = predict_env(algorithm, out_env, device, timers=timers)
@@ -364,6 +447,18 @@ def run_single(
                 record         = record,
                 timers         = timers,
             )
+            if save_weights:
+                save_model_weights(
+                    algorithm      = algorithm,
+                    algorithm_name = algorithm_class.__name__,
+                    hparams_seed   = hparams_seed,
+                    trial_seed     = trial_seed,
+                    input_shape    = input_shape,
+                    n_classes      = n_classes,
+                    hp             = hp,
+                    save_dir       = save_dir,
+                    record         = record,
+                )
 
     if debug:
         record['timers'] = dict(timers)
@@ -399,6 +494,7 @@ def run_sweep(
     search_method='random',
     backbone='resnet50',
     debug=False,
+    save_weights=False,
 ):
     """
     envs_splits: single fixed split, shared across all trials (default mode).
@@ -437,18 +533,32 @@ def run_sweep(
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
+        def _subset_labels(subset):
+            """Labels of a torch Subset (RotatedMNIST, PACS) without loading the images when possible."""
+            base = subset.dataset
+            if hasattr(base, 'targets'):            # ImageFolder (PACS)
+                all_labels = np.asarray(base.targets)
+            elif hasattr(base, 'tensors'):          # TensorDataset (DomainBed MNIST envs)
+                all_labels = base.tensors[1].numpy()
+            else:
+                return np.array([int(y) for _, y in subset])
+            return all_labels[np.asarray(subset.indices)]
+
         def _save_metadata(splits, suffix=''):
-            _, sample_out = splits[0]
-            if not is_tensor_env(sample_out):
-                return
-            is_image = sample_out['images'].dim() == 4
+            # labels of every env's out split, plus the test env's in split
+            # ('_in'); colors only for ColoredMNIST-style 2-channel images
             for i, (in_env, out_env) in enumerate(splits):
-                labels = out_env['labels'].numpy()
-                np.save(os.path.join(save_dir, f'env{i}{suffix}_labels.npy'), labels)
-                if is_image:
-                    images = out_env['images']
-                    colors = (images[:, 1, :, :].sum(dim=(1, 2)) > 0).numpy().astype(np.int32)
-                    np.save(os.path.join(save_dir, f'env{i}{suffix}_colors.npy'), colors)
+                parts = [('', out_env)] + ([('_in', in_env)] if i == test_env_idx else [])
+                for tag, env in parts:
+                    if is_tensor_env(env):
+                        labels = env['labels'].numpy()
+                    else:
+                        labels = _subset_labels(env)
+                    np.save(os.path.join(save_dir, f'env{i}{suffix}{tag}_labels.npy'), labels)
+                    if is_tensor_env(env) and env['images'].dim() == 4:
+                        images = env['images']
+                        colors = (images[:, 1, :, :].sum(dim=(1, 2)) > 0).numpy().astype(np.int32)
+                        np.save(os.path.join(save_dir, f'env{i}{suffix}{tag}_colors.npy'), colors)
 
         if envs_splits_per_trial is not None:
             for t, splits in envs_splits_per_trial.items():
@@ -507,6 +617,7 @@ def run_sweep(
                     save_dir        = save_dir,
                     search_method   = search_method,
                     debug           = debug,
+                    save_weights    = save_weights,
                 )
 
                 env_accs = " | ".join(
