@@ -1,0 +1,62 @@
+[
+  {
+    "args": {
+      "test_envs": [
+        5
+      ],
+      "hparams_seed": 0,
+      "trial_seed": 0,
+      "dataset": "RotatedMNIST",
+      "algorithm": "ERM",
+      "search_method": "random"
+    },
+    "hparams": {
+      "data_augmentation": true,
+      "resnet18": false,
+      "resnet50_augmix": true,
+      "dinov2": false,
+      "vit": false,
+      "vit_attn_tune": false,
+      "freeze_bn": false,
+      "lars": false,
+      "linear_steps": 500,
+      "resnet_dropout": 0.5,
+      "vit_dropout": 0.0,
+      "class_balanced": false,
+      "nonlinear_classifier": false,
+      "lr": 0.00046815656186638063,
+      "weight_decay": 0.0,
+      "batch_size": 24
+    },
+    "step": 5001,
+    "algorithm": "ERM",
+    "train_time": 82.69891548156738,
+    "model_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_weights.pt",
+    "search_method": "random",
+    "env0_in_acc": 0.9928219412899079,
+    "env0_out_acc": 0.982426060865838,
+    "env1_in_acc": 0.9949646453824726,
+    "env1_out_acc": 0.9875696528075439,
+    "env2_in_acc": 0.9956074566102421,
+    "env2_out_acc": 0.9854264894984998,
+    "env3_in_acc": 0.9970002142704093,
+    "env3_out_acc": 0.9914273467638234,
+    "env4_in_acc": 0.99217829208186,
+    "env4_out_acc": 0.9781397342477497,
+    "env5_in_acc": 0.9309975356262724,
+    "env5_out_acc": 0.9387055293613373,
+    "env0_pred_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env0_preds.npy",
+    "env0_prob_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env0_probs.npy",
+    "env1_pred_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env1_preds.npy",
+    "env1_prob_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env1_probs.npy",
+    "env2_pred_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env2_preds.npy",
+    "env2_prob_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env2_probs.npy",
+    "env3_pred_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env3_preds.npy",
+    "env3_prob_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env3_probs.npy",
+    "env4_pred_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env4_preds.npy",
+    "env4_prob_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env4_probs.npy",
+    "env5_pred_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env5_preds.npy",
+    "env5_prob_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_env5_probs.npy",
+    "feat_path": "./results_timing/rotatedmnist/test_env5/cnn/random_pertrial/models/ERM_hpseed0_trial0_testenv5_features.npy"
+  }
+]
